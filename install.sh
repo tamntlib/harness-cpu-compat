@@ -125,13 +125,13 @@ case "$HCC_TOOL" in claude|agy) HCC_TOOLS=("$HCC_TOOL");; all) HCC_TOOLS=(claude
 case "$HCC_REQUEST_MODE" in auto|native|qemu) ;; *) hcc_die 'Invalid execution mode.';; esac
 [[ ${HCC_PROBE_TIMEOUT:-20} =~ ^[1-9][0-9]?$ ]] || hcc_die 'HCC_PROBE_TIMEOUT must be 1..99 seconds.'
 [[ -z "$HCC_FROM" || "$HCC_TOOL" != all ]] || hcc_die '--from-binary requires one explicit tool.'
-for dependency in uname realpath sha256sum readlink dirname tr; do hcc_need "$dependency"; done
+for dependency in uname realpath sha256sum readlink dirname tr cmp; do hcc_need "$dependency"; done
 hcc_paths
 if (( HCC_DOCTOR )); then hcc_readonly; exit 0; fi
 if (( HCC_DRY )); then
     hcc_readonly
     printf 'Auto-repair request: %s (no unit writes or manager calls)\n' "$HCC_WATCH_ACTION"
-    printf 'PLAN: install %s; mode=%s; release=%s; backups=%s/tools/<tool>/original\n' "$HCC_TOOL" "$HCC_REQUEST_MODE" "$HCC_REQUEST_VERSION" "$HCC_ROOT"
+    printf 'PLAN: install %s; mode=%s; release=%s; store=%s/releases/<tool>\n' "$HCC_TOOL" "$HCC_REQUEST_MODE" "$HCC_REQUEST_VERSION" "$HCC_ROOT"
     printf 'AGY entry: %s/.gemini/bin/agy; CLI entries: %s/.local/bin/{claude,agy}\n' "$HOME" "$HOME"
     printf 'No files changed. Close IDE sessions before installation/repair; reload afterward.\n'
     exit 0
@@ -148,7 +148,7 @@ for tool in "${HCC_TOOLS[@]}"; do hcc_check_existing "$tool"; done
 if [[ "$HCC_WATCH_ACTION" == --auto-repair ]]; then hcc_watch_init; hcc_watch_validate_units; hcc_watch_manager_check; fi
 if (( ! HCC_YES )); then
     [[ -t 0 ]] || hcc_die 'Use --yes for a noninteractive installation.'
-    printf 'Install %s in this user account? Existing entries will be backed up. If emulation needs missing QEMU, APT will install system package qemu-user (sudo when needed). Close IDE sessions first. [y/N]: ' "$HCC_TOOL" >&2
+    printf 'Install %s in this user account? Existing entries may be replaced; no historical baseline backup is kept. If emulation needs missing QEMU, APT will install system package qemu-user (sudo when needed). Close IDE sessions first. [y/N]: ' "$HCC_TOOL" >&2
     read -r answer; [[ "$answer" == y || "$answer" == Y ]] || exit 0
 fi
 umask 077

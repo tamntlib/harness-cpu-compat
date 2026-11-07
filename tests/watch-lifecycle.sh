@@ -72,6 +72,6 @@ FIXTURE
     last=
     while IFS= read -r line; do case "$line" in *' disable --now '*|*' enable --now '*) last=$line;; esac; done < "$HCC_SYSTEMCTL_LOG"
     [[ "$last" == *' disable --now '* && ! -e "$HCC_MANAGER_ACTIVE" && ! -e "$root/watch/enabled" ]] || fail "$operation reported success after a later manager activation"
-    if [[ "$operation" == uninstall ]]; then [[ ! -e "$HOME/.gemini/bin/agy" && ! -L "$HOME/.gemini/bin/agy" ]] || fail 'serialized uninstall retained primary entry'; fi
+    if [[ "$operation" == uninstall ]]; then [[ -f "$HOME/.gemini/bin/agy" && ! -L "$HOME/.gemini/bin/agy" ]] || fail 'serialized uninstall did not detach native entry'; fi
 done
 printf 'PASS watcher lifecycle: immutable refresh baselines and serialized install/disable/uninstall manager transitions\n'

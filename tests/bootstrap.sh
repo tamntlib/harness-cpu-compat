@@ -45,7 +45,7 @@ shopt -s nullglob
 left=("$TMPDIR"/hcc-bootstrap.*); [[ ${#left[@]} == 0 ]] || fail 'successful install leaked temporary bundle'
 # The installed launchers/program must not depend on the deleted temporary source.
 cat "$repo/uninstall.sh" | bash -s -- --tool agy --yes > "$work/uninstall.log" 2>&1
-[[ $("$HOME/.gemini/bin/agy") == original ]] || fail 'piped uninstall did not restore the original'
+[[ ! -L "$HOME/.gemini/bin/agy" && $("$HOME/.gemini/bin/agy" --version) == 1.0.0 ]] || fail 'piped uninstall did not retain current native version'
 left=("$TMPDIR"/hcc-bootstrap.*); [[ ${#left[@]} == 0 ]] || fail 'successful uninstall leaked temporary bundle'
 [[ $(wc -l < "$HCC_DOWNLOAD_LOG") == 2 ]] || fail 'bootstrap did not acquire exactly one archive per invocation'
 HCC_DOWNLOAD_FAIL=1 bash "$repo/install.sh" --help > /dev/null

@@ -34,7 +34,7 @@ bash "$repo/install.sh" --dry-run "${base[@]}" >/dev/null
 bash "$repo/install.sh" "${base[@]}"
 [[ $("$HOME/.gemini/bin/agy" --version) == 1.0.0 ]] || fail 'AGY wrapper cannot run'
 [[ $("$HOME/.local/bin/agy" 'space value' '') == $'<space value>\n<>' ]] || fail 'CLI alias arguments'
-[[ -f "$HOME/.local/share/harness-cpu-compat/tools/agy/original/entry" ]] || fail 'original not backed up'
+[[ ! -e "$HOME/.local/share/harness-cpu-compat/tools/agy/original" ]] || fail 'obsolete original snapshot created'
 entry=$(sha256sum "$HOME/.gemini/bin/agy")
 bash "$repo/install.sh" "${base[@]}"
 [[ $(sha256sum "$HOME/.gemini/bin/agy") == "$entry" ]] || fail 'repeat install changed launcher'
@@ -45,7 +45,7 @@ if bash "$repo/uninstall.sh" --tool agy --yes >/dev/null 2>&1; then fail 'uninst
 [[ $(< "$HOME/.gemini/bin/agy") == foreign-update ]] || fail 'foreign replacement lost'
 bash "$repo/install.sh" "${base[@]}" --repair
 bash "$repo/uninstall.sh" --tool agy --yes
-[[ $(< "$HOME/.gemini/bin/agy") == original-vendor-entry ]] || fail 'original not restored'
-[[ ! -e "$HOME/.local/bin/agy" && ! -L "$HOME/.local/bin/agy" ]] || fail 'CLI alias retained'
+[[ ! -L "$HOME/.gemini/bin/agy" && $("$HOME/.gemini/bin/agy" --version) == 1.0.0 ]] || fail 'current AGY not detached to native layout'
+[[ $(readlink "$HOME/.local/bin/agy") == "$HOME/.gemini/bin/agy" ]] || fail 'native CLI alias missing'
 bash "$repo/uninstall.sh" --tool agy --yes
-printf 'PASS lifecycle: read-only inspection, install, repeat, foreign-update refusal, explicit repair, original restore, repeat uninstall\n'
+printf 'PASS lifecycle: read-only inspection, install, repeat, foreign-update refusal, explicit repair, current native handoff, repeat uninstall\n'

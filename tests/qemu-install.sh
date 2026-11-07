@@ -6,7 +6,7 @@ trap 'rm -rf -- "$work"' EXIT
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 setup() {
     case_dir="$work/$1"; mkdir -p "$case_dir/bin" "$case_dir/home/.local/bin"
-    for cmd in bash cat chmod cmp cp date dirname env flock grep head ln mkdir mktemp mv readlink realpath rm sha256sum sleep timeout tr uname; do
+    for cmd in bash basename cat chmod cmp cp date dirname env flock grep head ln mkdir mktemp mv readlink realpath rm sha256sum sleep stat timeout tr uname; do
         ln -s "$(command -v "$cmd")" "$case_dir/bin/$cmd"
     done
     printf 'old-entry\n' > "$case_dir/home/.local/bin/claude"

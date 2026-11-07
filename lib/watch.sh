@@ -111,8 +111,9 @@ hcc_watch_enable() {
     local suffix temporary digest baseline staged index
     local -a digests=()
     hcc_watch_init
-    [[ -f "$HCC_ROOT/tools/agy/installed" && ! -e "$HCC_ROOT/tools/agy/pending" && ! -e "$WDIR/pending" ]] || hcc_die 'A complete managed AGY installation is required before enabling its watcher.'
-    [[ $(hcc_fingerprint "$HOME/.gemini/bin/agy") == "$(< "$HCC_ROOT/tools/agy/installed")" && $(hcc_fingerprint "$HOME/.local/bin/agy") == "$(< "$HCC_ROOT/tools/agy/alias-installed")" ]] || hcc_die 'AGY entries drifted before watcher enable.'
+    [[ -L "$HCC_ROOT/tools/agy/current" && ! -e "$HCC_ROOT/tools/agy/pending" && ! -e "$WDIR/pending" ]] || hcc_die 'A complete managed AGY installation is required before enabling its watcher.'
+    hcc_selected agy
+    hcc_is_managed "$HOME/.gemini/bin/agy" agy "$SELECT_RELEASE" && hcc_is_managed "$HOME/.local/bin/agy" agy "$SELECT_RELEASE" || hcc_die 'AGY entries drifted before watcher enable.'
     hcc_watch_validate_units; hcc_watch_manager_check
     mkdir -m 700 -p -- "$WDIR" "$WCONFIG" "$WDIR/units"
     temporary=$(mktemp -d "$WDIR/enable.XXXXXX")
@@ -156,6 +157,7 @@ hcc_watch_enable() {
     if [[ ! -f "$WDIR/enabled" ]]; then printf '%s\n' "$HCC_ROOT" > "$temporary/enabled"; mv -Tf -- "$temporary/enabled" "$WDIR/enabled"; fi
     if systemctl --user daemon-reload && systemctl --user enable --now "$WUNIT.path" "$WUNIT.timer" &&
        hcc_watch_triggers_ready; then
+        rm -rf -- "$temporary"
         hcc_log 'AGY watcher enabled explicitly. Recovery may still require an IDE reload.'
     else
         rm -f -- "$WDIR/enabled"
@@ -227,10 +229,7 @@ hcc_watch_prepare_slot() {
     WSLOT=$(mktemp -d "$parent/.hcc-watch-recovery.XXXXXX")
     if [[ "$HCC_MODE" == native ]]; then ln -s -- "$release/binary" "$WSLOT/prepared";
     else
-        {
-            printf '#!/usr/bin/env bash\n# harness-cpu-compat immutable AGY generation\n'
-            printf 'exec /bin/bash %q --generation %q agy %q "$@"\n' "$HCC_ROOT/program/lib/runtime.sh" "$HCC_ROOT" "$release"
-        } > "$WSLOT/prepared"
+        hcc_render_launcher agy "$release" > "$WSLOT/prepared"
         chmod 700 -- "$WSLOT/prepared"; bash -n "$WSLOT/prepared"
     fi
 }
@@ -244,13 +243,15 @@ hcc_watch_publish() (
     parent_identity=$(stat -c '%d:%i' -- .)
     relative=$(basename -- "$slot")
     [[ "$relative" == .hcc-watch-recovery.* && -d "$relative" && ! -L "$relative" ]] || exit 1
-    mv -T -- "$name" "$relative/captured" || exit 1
-    actual=$(hcc_fingerprint "$relative/captured") || exit 1
-    if [[ "$actual" != "$expected" ]]; then
-        # Put an unexpected captured ordinary file/symlink back only if the public name is free.
-        ln -P -T -- "$relative/captured" "$name" 2>/dev/null || true
-        hcc_log 'Entry changed at capture; retained recovery journal and captured entry.'
-        exit 1
+    if [[ "$expected" != absent ]]; then
+        mv -T -- "$name" "$relative/captured" || exit 1
+        actual=$(hcc_fingerprint "$relative/captured") || exit 1
+        if [[ "$actual" != "$expected" ]]; then
+            # Restore an unexpected capture only into a still-free public name.
+            ln -P -T -- "$relative/captured" "$name" 2>/dev/null || true
+            hcc_log 'Entry changed at capture; retained recovery journal and captured entry.'
+            exit 1
+        fi
     fi
     ln -P -T -- "$relative/prepared" "$name" || { hcc_log 'Concurrent publication won; foreign entry left untouched.'; exit 1; }
     [[ $(stat -c '%d:%i' -- "$parent") == "$parent_identity" && $(realpath -e -- "$(dirname -- "$entry")") == "$parent" ]] || { hcc_log 'Entry parent moved during publication; preserve recovery state.'; exit 1; }
@@ -273,10 +274,10 @@ hcc_watch_reconcile() {
     hcc_watch_validate_units
     [[ -f "$WCLAIM" && $(< "$WCLAIM") == "$HCC_ROOT" && $(< "$WDIR/enabled") == "$HCC_ROOT" ]] || hcc_die 'Watcher enablement/entry ownership changed.'
     directory="$HCC_ROOT/tools/agy"; entry="$HOME/.gemini/bin/agy"; alias="$HOME/.local/bin/agy"
-    [[ -f "$directory/installed" && -f "$directory/alias-installed" ]] || hcc_die 'Managed AGY ownership is missing.'
+    hcc_selected agy
     hcc_check_parent "$entry"; hcc_check_parent "$alias"
-    alias_expected=$(< "$directory/alias-installed")
-    [[ $(hcc_fingerprint "$alias") == "$alias_expected" ]] || hcc_die 'CLI alias changed; automatic overwrite refused.'
+    hcc_is_managed "$alias" agy "$SELECT_RELEASE" || hcc_die 'CLI alias changed; automatic overwrite refused.'
+    alias_expected=$(hcc_fingerprint "$alias")
     old_current=$(readlink -- "$directory/current")
     selected=$(realpath -e -- "$directory/current")
     [[ "$selected" == "$HCC_ROOT/releases/agy/"* && ! -L "$selected/binary" && -f "$selected/binary" && -f "$selected/sha256" && ! -L "$selected/sha256" && -f "$selected/selection" && ! -L "$selected/selection" ]] || hcc_die 'Selected private release is invalid.'
@@ -286,7 +287,7 @@ hcc_watch_reconcile() {
     [[ ${#selection[@]} == 3 && ${selection[0]} == "$selected/binary" ]] || hcc_die 'Private selection changed.'
     qemu=${selection[2]}
     intended=$(hcc_fingerprint "$entry")
-    [[ "$intended" != "$(< "$directory/installed")" ]] || return 0
+    if hcc_is_managed "$entry" agy "$SELECT_RELEASE"; then return 0; fi
     [[ -f "$entry" && ! -L "$entry" ]] || hcc_die 'Only an ordinary incoming vendor executable can be adopted automatically.'
     sleep .2
     [[ $(hcc_fingerprint "$entry") == "$intended" ]] || hcc_die 'Incoming artifact is still changing; retry on a later event.'
@@ -312,8 +313,10 @@ hcc_watch_reconcile() {
         [[ $(hcc_hash "$WSTAGE/release/binary") == "$HCC_DIGEST" ]] || hcc_die 'Prepared release copy changed.'
         printf '%s\n' "$release/binary" "$HCC_MODE" "$HCC_QEMU" > "$WSTAGE/release/selection"
         printf '%s\n' "$HCC_DIGEST" > "$WSTAGE/release/sha256"
+        printf '%s\n' "$HCC_VERSION" > "$WSTAGE/release/version"
         mv -T -- "$WSTAGE/release" "$release"
     fi
+    [[ -f "$release/version" && ! -L "$release/version" && $(< "$release/version") == "$HCC_VERSION" ]] || hcc_die 'Release version metadata missing or changed.'
     hcc_watch_prepare_slot "$entry" "$release"; WPRIMARY_SLOT=$WSLOT
     hcc_watch_prepare_slot "$alias" "$release"; WALIAS_SLOT=$WSLOT
     desired=$(hcc_fingerprint "$WPRIMARY_SLOT/prepared")
@@ -322,11 +325,13 @@ hcc_watch_reconcile() {
     ln -T -- "$WSTAGE/journal" "$WDIR/pending" || hcc_die 'Cannot create exclusive watcher recovery journal.'
     hcc_watch_publish "$entry" "$WPRIMARY_SLOT" "$intended"
     hcc_watch_publish "$alias" "$WALIAS_SLOT" "$alias_expected"
-    # Both entry publications succeeded. Record intended hashes, never a later vendor replacement.
+    # Both entry publications succeeded; current selection is sufficient state.
     ln -s -- "$release" "$directory/current.watch-new.$$"
     mv -Tf -- "$directory/current.watch-new.$$" "$directory/current"
-    printf '%s\n' "$desired" > "$directory/installed"
-    printf '%s\n' "$desired" > "$directory/alias-installed"
+    if [[ $(hcc_fingerprint "$WPRIMARY_SLOT/captured") == "$intended" ]]; then rm -rf -- "$WPRIMARY_SLOT";
+    else cp -- "$WSTAGE/journal" "$WPRIMARY_SLOT/journal"; hcc_log 'Changed captured vendor bytes retained for deliberate recovery.'; fi
+    if [[ $(hcc_fingerprint "$WALIAS_SLOT/captured") == "$alias_expected" ]]; then rm -rf -- "$WALIAS_SLOT";
+    else cp -- "$WSTAGE/journal" "$WALIAS_SLOT/journal"; hcc_log 'Changed captured alias retained for deliberate recovery.'; fi
     rm -- "$WDIR/pending"
     hcc_log "AGY watcher repaired version=$HCC_VERSION mode=$HCC_MODE sha256=$HCC_DIGEST. Reload/reconnect may still be necessary."
 }

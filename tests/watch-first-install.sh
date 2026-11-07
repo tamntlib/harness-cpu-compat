@@ -24,24 +24,16 @@ if [[ ${HCC_HOLD_INSTALL:-0} == 1 && ${!#} == "$HOME/.gemini/bin/agy" ]]; then
  touch "$HCC_GATE/install-ready"
  for ((i=0;i<1000;i++)); do [[ -f "$HCC_GATE/install-release" ]] && break; sleep .01; done
 fi
+if [[ ${HCC_IS_UNINSTALL:-0} == 1 && ${!#} == *'/captured' && "$PWD" == "$HOME/.gemini/bin" ]]; then
+ touch "$HCC_GATE/restore-ready"
+ for ((i=0;i<1000;i++)); do [[ -f "$HCC_GATE/restore-release" ]] && break; sleep .01; done
+fi
 exec /usr/bin/mv "$@"
 FIXTURE
     cat > "$HCC_GATE/bin/flock" <<'FIXTURE'
 #!/usr/bin/env bash
 [[ ${HCC_IS_UNINSTALL:-0} != 1 ]] || touch "$HCC_GATE/uninstall-at-lock"
 exec /usr/bin/flock "$@"
-FIXTURE
-    cat > "$HCC_GATE/bin/rm" <<'FIXTURE'
-#!/usr/bin/env bash
-if [[ ${HCC_IS_UNINSTALL:-0} == 1 ]]; then
- for arg; do
-  if [[ "$arg" == "$HOME/.gemini/bin/agy" ]]; then
-   touch "$HCC_GATE/restore-ready"
-   for ((i=0;i<1000;i++)); do [[ -f "$HCC_GATE/restore-release" ]] && break; sleep .01; done
-  fi
- done
-fi
-exec /usr/bin/rm "$@"
 FIXTURE
     printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$HCC_GATE/manager.log"\n' > "$HCC_GATE/bin/systemctl"
     chmod +x "$HCC_GATE/binary" "$HCC_GATE/bin/"*
@@ -52,7 +44,7 @@ FIXTURE
     for ((i=0;i<500;i++)); do [[ -f "$HCC_GATE/install-ready" ]] && break; sleep .01; done
     [[ -f "$HCC_GATE/install-ready" ]] || fail 'first install did not reach publication gate'
     root="$HOME/.local/share/harness-cpu-compat"
-    [[ ! -e "$root/tools/agy/installed" && ! -e "$root/watch/owned" ]] || fail 'fixture is not a first install'
+    [[ -e "$root/tools/agy/pending" && ! -e "$root/watch/owned" ]] || fail 'fixture is not an unfinished first install'
     HCC_IS_UNINSTALL=1 bash "$repo/uninstall.sh" --tool agy --yes > "$HCC_GATE/uninstall.log" 2>&1 & uninstaller=$!
     for ((i=0;i<500;i++)); do [[ -f "$HCC_GATE/uninstall-at-lock" ]] && break; sleep .01; done
     [[ -f "$HCC_GATE/uninstall-at-lock" ]] || fail 'uninstall did not reach a lock'
@@ -70,6 +62,6 @@ FIXTURE
     touch "$HCC_GATE/restore-release"
     wait "$uninstaller"; uninstaller=
     [[ $second != 0 && ! -e "$root/watch/enabled" && ! -e "$HOME/.gemini/bin/.hcc-watch-owner" ]] || fail "first $mode install let uninstall bypass ownership or watcher shutdown"
-    [[ ! -e "$HOME/.gemini/bin/agy" && ! -L "$HOME/.gemini/bin/agy" && ! -e "$HOME/.local/bin/agy" && ! -L "$HOME/.local/bin/agy" ]] || fail 'restoration did not complete'
+    [[ -f "$HOME/.gemini/bin/agy" && ! -L "$HOME/.gemini/bin/agy" && $(readlink "$HOME/.local/bin/agy") == "$HOME/.gemini/bin/agy" ]] || fail 'native handoff did not complete'
 done
 printf 'PASS first-install concurrency: uninstall re-evaluates eligibility under management lock, retains ownership and disables newly enabled watcher\n'

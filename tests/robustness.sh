@@ -38,8 +38,9 @@ bash "$repo/install.sh" "${args[@]}" --qemu "$work/qemu-two" >/dev/null
 mapfile -t values < "$selection"
 [[ ${values[2]} == "$work/qemu-two" ]] || fail 'new QEMU selection was ignored'
 bash "$repo/uninstall.sh" --tool claude --yes >/dev/null
+rm "$HOME/.local/bin/claude"
 printf 'new vendor installation\n' > "$HOME/.local/bin/claude"
 bash "$repo/install.sh" "${args[@]}" >/dev/null
 bash "$repo/uninstall.sh" --tool claude --yes >/dev/null
-[[ $(< "$HOME/.local/bin/claude") == 'new vendor installation' ]] || fail 'reinstall restored a stale original'
-printf 'PASS robustness: native help failure, checksum rejection, active preservation, QEMU reselection, reinstall baseline\n'
+[[ $("$HOME/.local/bin/claude" --version) == 1.0.0 && -L "$HOME/.local/bin/claude" ]] || fail 'reinstall did not detach current version'
+printf 'PASS robustness: native help failure, checksum rejection, active preservation, QEMU reselection, reinstall native handoff\n'

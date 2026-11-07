@@ -49,6 +49,7 @@ if HCC_MANAGER_QUERY_FAIL=1 bash "$repo/install.sh" "${args[@]}" --auto-repair >
 [[ $(sha256sum "$HOME/.gemini/bin/agy") == "$primary_before" && ! -e "$root/watch/enabled" ]] || fail 'unknown manager ownership mutated AGY'
 if ! bash "$repo/install.sh" "${args[@]}" --auto-repair > "$work/enable.log" 2>&1; then fail 'opt-in --auto-repair is not supported'; fi
 [[ -f "$root/watch/enabled" ]] || fail 'explicit watcher enable missing'
+if compgen -G "$root/watch/enable.*" >/dev/null; then fail 'successful enable retained temporary unit copies'; fi
 shopt -s nullglob
 units=("$HOME/.config/systemd/user/"hcc-agy-watch-*.path)
 [[ ${#units[@]} == 1 ]] || fail 'owned path unit missing'
@@ -81,7 +82,7 @@ units=("$HOME/.config/systemd/user/"hcc-agy-watch-*)
 [[ ${#units[@]} == 0 && $(sha256sum "$HOME/.gemini/bin/agy") == "$launcher" ]] || fail 'disable changed launcher or retained units'
 bash "$repo/install.sh" "${args[@]}" --auto-repair > "$work/reenable.log" 2>&1
 bash "$repo/uninstall.sh" --tool agy --yes
-[[ ! -e "$root/watch/enabled" && ! -e "$HOME/.gemini/bin/agy" ]] || fail 'uninstall did not disable watcher first'
+[[ ! -e "$root/watch/enabled" && ! -L "$HOME/.gemini/bin/agy" && $("$HOME/.gemini/bin/agy" --version) == 1.0.0 ]] || fail 'uninstall did not disable watcher and detach native version'
 : > "$HCC_SYSTEMCTL_LOG"
 if HCC_MANAGER_FAIL=1 bash "$repo/install.sh" "${args[@]}" --auto-repair > "$work/activation-failed.log" 2>&1; then fail 'manager acceptance without active triggers was reported as enabled'; fi
 [[ ! -e "$root/watch/enabled" ]] || fail 'failed activation retained enabled flag'

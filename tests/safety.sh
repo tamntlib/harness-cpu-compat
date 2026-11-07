@@ -10,26 +10,26 @@ mkdir -p "$HOME/.local/bin"
 printf 'original\n' > "$HOME/.local/bin/claude"
 printf '#!/usr/bin/env bash\ncase "${1:-}" in --version) echo 1.0.0;; --help) echo help;; esac\n' > "$work/binary"
 chmod +x "$work/binary"
-digest=$(sha256sum "$work/binary");digest=${digest%% *}
+digest=$(sha256sum < "$work/binary");digest=${digest%% *}
 args=(--tool claude --from-binary "$work/binary" --version 1.0.0 --sha256 "$digest" --yes)
 bash "$repo/install.sh" "${args[@]}" >/dev/null
 state="$HOME/.local/share/harness-cpu-compat/tools/claude"
-printf corrupted > "$state/original/entry"
-if bash "$repo/uninstall.sh" --tool claude --yes >/dev/null 2>&1; then fail 'corrupted original restored'; fi
-[[ $("$HOME/.local/bin/claude" --version) == 1.0.0 ]] || fail 'failed uninstall changed live entry'
-printf 'original\n' > "$state/original/entry"
+selected=$(readlink "$state/current")
+entry_before=$(readlink "$HOME/.local/bin/claude")
+printf corrupted >> "$selected/binary"
+if bash "$repo/uninstall.sh" --tool claude --yes >/dev/null 2>&1; then fail 'corrupted selected executable accepted'; fi
+[[ $(readlink "$HOME/.local/bin/claude") == "$entry_before" ]] || fail 'failed uninstall changed live entry'
+cp "$work/binary" "$selected/binary"
 bash "$repo/uninstall.sh" --tool claude --yes >/dev/null
-# Verify all AGY backups before restoring either of its two entry points.
+# Validate both AGY entries before detaching either of them.
 mkdir -p "$HOME/.gemini/bin"
-printf 'agy original\n' > "$HOME/.gemini/bin/agy"
-printf 'alias original\n' > "$HOME/.local/bin/agy"
 bash "$repo/install.sh" "${args[@]}" --tool agy >/dev/null
-agy_state="$HOME/.local/share/harness-cpu-compat/tools/agy"
-printf corrupted > "$agy_state/alias-original/entry"
 primary=$(readlink "$HOME/.gemini/bin/agy")
-if bash "$repo/uninstall.sh" --tool agy --yes >/dev/null 2>&1; then fail 'corrupted alias backup accepted'; fi
-[[ -L "$HOME/.gemini/bin/agy" && $(readlink "$HOME/.gemini/bin/agy") == "$primary" ]] || fail 'bad alias backup caused partial uninstall'
-# SIGKILL after current-selection publication must not silently establish a new baseline on retry.
+rm "$HOME/.local/bin/agy"
+printf 'unknown alias\n' > "$HOME/.local/bin/agy"
+if bash "$repo/uninstall.sh" --tool agy --yes >/dev/null 2>&1; then fail 'unknown alias accepted'; fi
+[[ -L "$HOME/.gemini/bin/agy" && $(readlink "$HOME/.gemini/bin/agy") == "$primary" ]] || fail 'bad alias caused partial uninstall'
+# SIGKILL must retain only this unfinished operation's recovery, never create a baseline.
 mkdir "$work/bin"
 cat > "$work/bin/mv" <<'FIXTURE'
 #!/usr/bin/env bash
@@ -39,12 +39,15 @@ done
 exec /usr/bin/mv "$@"
 FIXTURE
 chmod +x "$work/bin/mv"
+preimage=$(readlink "$HOME/.local/bin/claude")
 set +e
 PATH="$work/bin:$PATH" bash "$repo/install.sh" "${args[@]}" > "$work/killed.log" 2>&1
 status=$?
 set -e
 [[ "$status" == 137 ]] || fail "kill injection failed ($status)"
 [[ -f "$state/pending" ]] || fail 'SIGKILL left no durable incomplete-publication marker'
-if bash "$repo/install.sh" "${args[@]}" >/dev/null 2>&1; then fail 'interrupted install silently replaced recovery baseline'; fi
-[[ $(< "$state/original/entry") == original ]] || fail 'original recovery material lost'
-printf 'PASS safety: corrupted-backup refusal, SIGKILL interruption marker and fail-closed retry\n'
+if bash "$repo/install.sh" "${args[@]}" >/dev/null 2>&1; then fail 'interrupted install silently retried'; fi
+mapfile -t recovery < "$state/pending"
+[[ $(readlink "${recovery[0]}/entry/entry") == "$preimage" ]] || fail 'unfinished transaction lost its preimage'
+[[ ! -e "$state/original" && ! -e "$state/installed" ]] || fail 'historical baseline metadata recreated'
+printf 'PASS safety: selected checksum/unknown alias refusal, SIGKILL transaction recovery and fail-closed retry\n'

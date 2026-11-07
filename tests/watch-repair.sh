@@ -18,6 +18,13 @@ bash "$repo/lib/watch.sh" --reconcile "$root" "$HOME" > "$work/repair.log" 2>&1
 selected=$(readlink "$root/tools/agy/current")
 [[ "$selected" != "$old" && -f "$old/binary" && $(< "$selected/sha256") == "$new_digest" ]] || fail 'new selection/fallback mismatch'
 [[ ! -e "$root/watch/pending" ]] || fail 'successful repair left pending marker'
+[[ $(< "$selected/version") == 1.0.1 ]] || fail 'watcher omitted current version metadata'
+for name in original alias-original installed alias-installed conflicts history; do
+    [[ ! -e "$root/tools/agy/$name" ]] || fail "watcher retained obsolete baseline metadata: $name"
+done
+for parent in "$HOME/.gemini/bin" "$HOME/.local/bin"; do
+    if compgen -G "$parent/.hcc-watch-recovery.*" > /dev/null; then fail 'successful repair retained ordinary capture backups'; fi
+done
 before=$(sha256sum "$HCC_NETWORK_LOG")
 bash "$repo/lib/watch.sh" --reconcile "$root" "$HOME"
 [[ $(sha256sum "$HCC_NETWORK_LOG") == "$before" ]] || fail 'self event repeated downloads'

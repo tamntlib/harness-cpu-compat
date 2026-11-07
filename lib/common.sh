@@ -27,10 +27,10 @@ hcc_paths() {
         [[ ! -L "$directory" && ( ! -e "$directory" || ( -d "$directory" && -O "$directory" ) ) ]] || hcc_die "Unsafe state directory: $directory"
     done
     for tool in claude agy; do
-        for directory in "$HCC_ROOT/tools/$tool" "$HCC_ROOT/releases/$tool" "$HCC_ROOT/tools/$tool/"{original,alias-original,conflicts,history}; do
+        for directory in "$HCC_ROOT/tools/$tool" "$HCC_ROOT/releases/$tool"; do
             [[ ! -L "$directory" && ( ! -e "$directory" || ( -d "$directory" && -O "$directory" ) ) ]] || hcc_die "Unsafe tool directory: $directory"
         done
-        for metadata in "$HCC_ROOT/tools/$tool/"{installed,alias-installed,pending,original/fingerprint,alias-original/fingerprint}; do
+        for metadata in "$HCC_ROOT/tools/$tool/pending"; do
             [[ ! -L "$metadata" && ( ! -e "$metadata" || ( -f "$metadata" && -O "$metadata" ) ) ]] || hcc_die "Unsafe state file: $metadata"
         done
         if [[ -e "$HCC_ROOT/tools/$tool/current" || -L "$HCC_ROOT/tools/$tool/current" ]]; then
@@ -191,30 +191,51 @@ hcc_copy_program() {
         cp -- "$source" "$temporary"; chmod 700 -- "$temporary"; mv -Tf -- "$temporary" "$destination"
     done
 }
-hcc_write_launcher() {
-    local destination=$1 tool=$2
-    {
+hcc_render_launcher() {
+    local tool=$1 generation=${2:-}
+    if [[ -n "$generation" ]]; then
+        printf '#!/usr/bin/env bash\n# harness-cpu-compat immutable AGY generation\n'
+        printf 'exec /bin/bash %q --generation %q %q %q "$@"\n' "$HCC_ROOT/program/lib/runtime.sh" "$HCC_ROOT" "$tool" "$generation"
+    else
         printf '#!/usr/bin/env bash\n# harness-cpu-compat managed launcher v1\n'
         printf 'exec /bin/bash %q %q %q "$@"\n' "$HCC_ROOT/program/lib/runtime.sh" "$HCC_ROOT" "$tool"
-    } > "$destination"
-    chmod 700 -- "$destination"
-    bash -n "$destination"
+    fi
+}
+hcc_write_launcher() {
+    hcc_render_launcher "$2" > "$1"
+    chmod 700 -- "$1"
+    bash -n "$1"
+}
+hcc_is_managed() {
+    local entry=$1 tool=$2 release=$3
+    if [[ -L "$entry" ]]; then
+        [[ $(readlink -- "$entry") == "$release/binary" ]]
+    elif [[ -f "$entry" ]]; then
+        cmp -s -- "$entry" <(hcc_render_launcher "$tool") ||
+            cmp -s -- "$entry" <(hcc_render_launcher "$tool" "$release")
+    else return 1; fi
+}
+hcc_is_independent_native() {
+    local entry=$1 resolved
+    [[ -f "$entry" && -x "$entry" ]] || return 1
+    resolved=$(realpath -e -- "$entry") || return 1
+    [[ "$resolved" != "$HCC_ROOT/"* ]] || return 1
+    # Do not classify arbitrary scripts as independent of HCC state.
+    [[ $(head -c 4 -- "$entry") == $'\177ELF' ]]
 }
 hcc_readonly() {
-    local tool entry directory installed current fingerprint
+    local tool entry directory
     for tool in "${HCC_TOOLS[@]}"; do
         entry=$(hcc_entry "$tool"); directory=$(hcc_tool_dir "$tool")
         printf '%s: entry=%s\n' "$tool" "$entry"
-        [[ ! -e "$directory/pending" ]] || printf '  INCOMPLETE publication; preserve recovery snapshots.\n'
-        if [[ -f "$directory/installed" ]]; then
-            installed=$(< "$directory/installed"); fingerprint=$(hcc_fingerprint "$entry")
-            if [[ "$installed" == "$fingerprint" ]]; then printf '  managed entry intact\n'; else printf '  CONFLICT: entry replaced; explicit --repair required\n'; fi
-            if [[ -L "$directory/current" && -f "$directory/current/selection" ]]; then
-                printf '  selection: '; tr '\n' ' ' < "$directory/current/selection"; printf '\n'
-                if [[ -f "$directory/current/binary" && -f "$directory/current/sha256" ]]; then
-                    [[ $(hcc_hash "$directory/current/binary") == "$(< "$directory/current/sha256")" ]] && printf '  binary checksum intact\n' || printf '  CONFLICT: selected binary changed\n'
-                fi
-            fi
+        [[ ! -e "$directory/pending" ]] || printf '  INCOMPLETE publication; preserve transaction recovery.\n'
+        if [[ -L "$directory/current" ]]; then
+            hcc_selected "$tool"
+            if hcc_is_managed "$entry" "$tool" "$SELECT_RELEASE"; then printf '  managed entry intact\n';
+            else printf '  CONFLICT: entry replaced; explicit --repair required\n'; fi
+            if [[ "$tool" == agy ]] && ! hcc_is_managed "$HOME/.local/bin/agy" agy "$SELECT_RELEASE"; then printf '  CONFLICT: CLI alias replaced\n'; fi
+            printf '  selection: %s %s %s\n' "$SELECT_BINARY" "$SELECT_MODE" "$SELECT_QEMU"
+            printf '  binary checksum intact\n'
         else printf '  not managed\n'; fi
     done
     for tool in "${HCC_TOOLS[@]}"; do [[ "$tool" != agy ]] || hcc_watch_report; done
@@ -222,9 +243,9 @@ hcc_readonly() {
     printf 'AGY IDE: experimental; its updater can replace the wrapper before execution.\n'
 }
 hcc_check_existing() {
-    local tool=$1 directory entry existing expected alias
+    local tool=$1 directory entry alias
     directory=$(hcc_tool_dir "$tool"); entry=$(hcc_entry "$tool")
-    [[ ! -e "$directory/pending" && ! -L "$directory/pending" ]] || hcc_die "Incomplete publication: $directory/pending; preserve recovery snapshots and resolve it before retrying."
+    [[ ! -e "$directory/pending" && ! -L "$directory/pending" ]] || hcc_die "Incomplete publication: $directory/pending; preserve transaction recovery."
     [[ "$tool" != agy || ! -e "$HCC_ROOT/watch/pending" ]] || hcc_die 'Incomplete watcher repair; preserve recovery material.'
     hcc_check_parent "$entry"
     if [[ "$tool" == agy ]]; then
@@ -232,20 +253,18 @@ hcc_check_existing() {
         if [[ -e "$claim" || -L "$claim" ]]; then
             [[ -f "$claim" && ! -L "$claim" && -O "$claim" && "$(< "$claim")" == "$HCC_ROOT" ]] || hcc_die 'Another state directory or unsafe claim owns the AGY watcher.'
         fi
-    fi
-    existing=$(hcc_fingerprint "$entry")
-    if [[ -f "$directory/installed" ]]; then
-        expected=$(< "$directory/installed")
-        if [[ "$existing" != "$expected" ]]; then
-            [[ "$HCC_REPAIR" == 1 ]] || hcc_die "$tool entry changed outside this tool; close IDE sessions and use --repair to preserve and replace it."
-        fi
-    fi
-    if [[ "$tool" == agy ]]; then
         alias="$HOME/.local/bin/agy"; hcc_check_parent "$alias"
-        existing=$(hcc_fingerprint "$alias")
-        if [[ -f "$directory/alias-installed" ]]; then
-            [[ "$existing" == "$(< "$directory/alias-installed")" ]] || hcc_die 'AGY CLI alias changed outside this tool.'
+    fi
+    if [[ -L "$directory/current" ]]; then
+        hcc_selected "$tool"
+        if ! hcc_is_managed "$entry" "$tool" "$SELECT_RELEASE"; then
+            [[ "$HCC_REPAIR" == 1 ]] || hcc_die "$tool entry changed outside this tool; close IDE sessions and use --repair."
         fi
+        if [[ "$tool" == agy ]]; then
+            hcc_is_managed "$alias" agy "$SELECT_RELEASE" || hcc_die 'AGY CLI alias changed outside this tool.'
+        fi
+    elif [[ -f "$entry" ]] && grep -aq '^# harness-cpu-compat' "$entry"; then
+        hcc_die 'An unrecognized HCC launcher exists; preserve its state and resolve ownership first.'
     fi
 }
 hcc_install_tool() {
@@ -269,35 +288,23 @@ hcc_install_tool() {
         cp -- "$stage/binary" "$stage/release/binary"; chmod 700 "$stage/release/binary"
         printf '%s\n' "$release/binary" "$HCC_MODE" "$HCC_QEMU" > "$stage/release/selection"
         printf '%s\n' "$HCC_DIGEST" > "$stage/release/sha256"
+        printf '%s\n' "$HCC_VERSION" > "$stage/release/version"
         mv -T -- "$stage/release" "$release"
     fi
+    [[ -f "$release/version" && ! -L "$release/version" && $(< "$release/version") == "$HCC_VERSION" ]] || hcc_die 'Release version metadata missing or changed.'
     hcc_copy_program
     mkdir -m 700 -p -- "$directory" "$(dirname -- "$entry")"
-    if [[ ! -f "$directory/installed" && -d "$directory/original" ]]; then
-        mkdir -m 700 -p -- "$directory/history"
-        mv -T -- "$directory/original" "$directory/history/original-$(date +%s)-$$"
-        if [[ -d "$directory/alias-original" ]]; then
-            mv -T -- "$directory/alias-original" "$directory/history/alias-$(date +%s)-$$"
-        fi
-    fi
-    [[ -d "$directory/original" ]] || hcc_snapshot "$entry" "$directory/original"
-    if [[ -f "$directory/installed" && "$preimage" != "$(< "$directory/installed")" ]]; then
-        hcc_snapshot "$entry" "$directory/conflicts/$(date +%s)-$$"
-    fi
     if [[ "$HCC_MODE" == native ]]; then ln -s -- "$release/binary" "$stage/launcher";
     else hcc_write_launcher "$stage/launcher" "$tool"; fi
     [[ $(hcc_fingerprint "$entry") == "$preimage" ]] || hcc_die 'Entry changed during installation; refusing publication.'
     if [[ "$tool" == agy ]]; then
         [[ $(hcc_fingerprint "$alias") == "$alias_preimage" ]] || hcc_die 'CLI alias changed during installation.'
-        [[ -d "$directory/alias-original" ]] || hcc_snapshot "$alias" "$directory/alias-original"
     fi
     old_current=$(readlink -- "$directory/current" 2>/dev/null || true)
     transaction="$stage/transaction"; mkdir -- "$transaction"
     hcc_snapshot "$entry" "$transaction/entry"
     [[ "$tool" != agy ]] || hcc_snapshot "$alias" "$transaction/alias"
     # EXIT rollback also handles a failed publication; SIGKILL remains recoverable from retained state.
-    hcc_snapshot "$directory/installed" "$transaction/installed"
-    hcc_snapshot "$directory/alias-installed" "$transaction/alias-installed"
     HCC_TX_DIR=$transaction; HCC_TX_TOOL=$tool; HCC_TX_OLD=$old_current
     HCC_TX_EXPECTED=$(hcc_fingerprint "$stage/launcher")
     printf '%s\n' "$transaction" "$old_current" > "$directory/pending.new.$$"
@@ -309,10 +316,8 @@ hcc_install_tool() {
         mkdir -m 700 -p -- "$(dirname -- "$alias")"
         cp -a -- "$stage/launcher" "${alias}.hcc-new.$$"; mv -Tf -- "${alias}.hcc-new.$$" "$alias"
         [[ $(hcc_fingerprint "$alias") == "$HCC_TX_EXPECTED" ]] || hcc_die 'CLI alias changed during publication.'
-        printf '%s\n' "$HCC_TX_EXPECTED" > "$directory/alias-installed"
     fi
     [[ $(hcc_fingerprint "$entry") == "$HCC_TX_EXPECTED" ]] || hcc_die 'Entry changed during publication.'
-    printf '%s\n' "$HCC_TX_EXPECTED" > "$directory/installed"
     rm -- "$directory/pending"
     HCC_TX_ACTIVE=0
     hcc_log "$tool installed: version=$HCC_VERSION mode=$HCC_MODE sha256=$HCC_DIGEST"
@@ -333,8 +338,6 @@ hcc_cleanup() {
             fi
             hcc_restore "$HCC_TX_DIR/entry" "$entry" || exit 1
             if [[ "$HCC_TX_TOOL" == agy ]]; then hcc_restore "$HCC_TX_DIR/alias" "$alias" || exit 1; fi
-            hcc_restore "$HCC_TX_DIR/installed" "$directory/installed" || exit 1
-            hcc_restore "$HCC_TX_DIR/alias-installed" "$directory/alias-installed" || exit 1
             if [[ -n "$HCC_TX_OLD" ]]; then
                 ln -s -- "$HCC_TX_OLD" "$directory/current.rollback.$$" && mv -Tf -- "$directory/current.rollback.$$" "$directory/current" || exit 1
             else rm -f -- "$directory/current" || exit 1; fi
@@ -348,26 +351,138 @@ hcc_cleanup() {
     fi
     exit "$status"
 }
+hcc_selected() {
+    local tool=$1 path metadata
+    path="$HCC_ROOT/tools/$tool/current"
+    [[ -L "$path" ]] || hcc_die 'Selected release is missing.'
+    SELECT_RELEASE=$(realpath -e -- "$path")
+    [[ "$SELECT_RELEASE" == "$HCC_ROOT/releases/$tool/"* && ! -L "$SELECT_RELEASE" ]] || hcc_die 'Selected release escapes its store.'
+    for metadata in binary sha256 selection version; do
+        [[ -f "$SELECT_RELEASE/$metadata" && ! -L "$SELECT_RELEASE/$metadata" && -O "$SELECT_RELEASE/$metadata" ]] || hcc_die 'Selected release metadata is missing or unsafe.'
+    done
+    SELECT_BINARY="$SELECT_RELEASE/binary"
+    SELECT_DIGEST=$(< "$SELECT_RELEASE/sha256")
+    SELECT_VERSION=$(< "$SELECT_RELEASE/version")
+    [[ "$SELECT_DIGEST" =~ ^[a-f0-9]{64}$ && -x "$SELECT_BINARY" && $(hcc_hash "$SELECT_BINARY") == "$SELECT_DIGEST" ]] || hcc_die 'Selected binary checksum changed.'
+    hcc_valid_version "$SELECT_VERSION" || hcc_die 'Selected version is invalid.'
+    local -a selection
+    mapfile -t selection < "$SELECT_RELEASE/selection"
+    [[ ${#selection[@]} == 3 && ${selection[0]} == "$SELECT_BINARY" ]] || hcc_die 'Selected execution metadata changed.'
+    SELECT_MODE=${selection[1]}; SELECT_QEMU=${selection[2]}
+    case "$SELECT_MODE" in native) [[ -z "$SELECT_QEMU" ]] || hcc_die 'Invalid native selection.';; qemu) hcc_plain_path "$SELECT_QEMU" || hcc_die 'Invalid emulator selection.';; *) hcc_die 'Invalid selection mode.';; esac
+    local engine_key
+    engine_key=$(printf '%s\n' "$SELECT_MODE" "$SELECT_QEMU" | sha256sum); engine_key=${engine_key%% *}
+    [[ "$SELECT_RELEASE" == "$HCC_ROOT/releases/$tool/$SELECT_VERSION-$SELECT_DIGEST-$SELECT_MODE-${engine_key:0:12}" ]] || hcc_die 'Selected version, checksum or execution metadata does not match its release.'
+}
+hcc_native_parent() {
+    local parent
+    hcc_check_parent "$1"
+    parent=$(realpath -m -- "$(dirname -- "$1")")
+    [[ "$parent" != "$HCC_ROOT" && "$parent" != "$HCC_ROOT/"* ]] || hcc_die 'Native destination still depends on HCC state.'
+}
+hcc_native_slot() {
+    local entry=$1 source=$2 expected=$3 parent
+    hcc_native_parent "$entry"
+    mkdir -m 700 -p -- "$(dirname -- "$entry")"
+    parent=$(realpath -e -- "$(dirname -- "$entry")")
+    NATIVE_SLOT=$(mktemp -d "$parent/.hcc-watch-recovery.XXXXXX")
+    printf '%s\n' "$entry" "$NATIVE_SLOT" >> "$NATIVE_JOURNAL"
+    cp -- "$source" "$NATIVE_SLOT/prepared" || hcc_die 'Cannot prepare native executable; retain pending recovery.'
+    chmod 755 -- "$NATIVE_SLOT/prepared"
+    [[ $(hcc_hash "$NATIVE_SLOT/prepared") == "$expected" ]] || hcc_die 'Native executable copy checksum mismatch; retain pending recovery.'
+}
+hcc_native_link_slot() {
+    local parent
+    hcc_native_parent "$1"
+    mkdir -m 700 -p -- "$(dirname -- "$1")"
+    parent=$(realpath -e -- "$(dirname -- "$1")")
+    NATIVE_SLOT=$(mktemp -d "$parent/.hcc-watch-recovery.XXXXXX")
+    printf '%s\n' "$1" "$NATIVE_SLOT" >> "$NATIVE_JOURNAL"
+    ln -s -- "$2" "$NATIVE_SLOT/prepared"
+}
+hcc_native_publish() {
+    hcc_watch_publish "$1" "$2" "$3" || hcc_die 'Native publication failed; preserve pending recovery.'
+}
+hcc_native_cleanup_slot() {
+    local slot=$1 expected=$2
+    [[ $(hcc_fingerprint "$slot/captured") == "$expected" ]] || hcc_die 'Captured entry changed; preserve pending recovery.'
+    rm -rf -- "$slot"
+}
 hcc_uninstall_tool() {
-    local tool=$1 directory entry alias expected
+    local tool=$1 directory entry alias primary_before alias_before stage primary_slot= alias_slot= native= primary_needed=0 alias_needed=0 canonical_slot=
     directory=$(hcc_tool_dir "$tool"); entry=$(hcc_entry "$tool"); alias="$HOME/.local/bin/agy"
-    [[ ! -e "$directory/pending" && ! -L "$directory/pending" ]] || hcc_die "Incomplete publication: $directory/pending; recovery material retained."
-    [[ -f "$directory/installed" ]] || { hcc_log "$tool is not managed; unchanged."; return; }
-    hcc_check_parent "$entry"
-    [[ "$tool" != agy ]] || hcc_check_parent "$alias"
+    [[ ! -e "$directory/pending" && ! -L "$directory/pending" ]] || hcc_die 'Incomplete publication; preserve recovery material.'
+    [[ -L "$directory/current" ]] || { hcc_log "$tool is not managed; unchanged."; return; }
+    hcc_selected "$tool"
+    hcc_native_parent "$entry"
     [[ "$tool" != agy || ! -e "$HCC_ROOT/watch/pending" ]] || hcc_die 'Incomplete watcher repair; preserve recovery material.'
-    expected=$(< "$directory/installed")
-    [[ $(hcc_fingerprint "$entry") == "$expected" ]] || hcc_die "$tool entry changed; refusing to overwrite it. Recovery data retained."
-    if [[ "$tool" == agy && -f "$directory/alias-installed" ]]; then
-        [[ $(hcc_fingerprint "$alias") == "$(< "$directory/alias-installed")" ]] || hcc_die 'AGY CLI alias changed; refusing uninstall.'
+    primary_before=$(hcc_fingerprint "$entry")
+    if [[ "$primary_before" == absent ]] || hcc_is_managed "$entry" "$tool" "$SELECT_RELEASE"; then primary_needed=1;
+    else hcc_is_independent_native "$entry" || hcc_die 'Unknown entry; refusing native handoff or state deletion.'; fi
+    if [[ "$tool" == agy ]]; then
+        hcc_native_parent "$alias"
+        alias_before=$(hcc_fingerprint "$alias")
+        if [[ "$alias_before" == absent ]] || hcc_is_managed "$alias" agy "$SELECT_RELEASE"; then alias_needed=1;
+        else hcc_is_independent_native "$alias" || hcc_die 'Unknown alias; refusing native handoff or state deletion.'; fi
+    elif (( primary_needed )); then
+        native="$HOME/.local/share/claude/versions/$SELECT_VERSION"
+        hcc_native_parent "$native"
+        if [[ -e "$native" || -L "$native" ]]; then
+            [[ -f "$native" && ! -L "$native" && -x "$native" && $(hcc_hash "$native") == "$SELECT_DIGEST" ]] || hcc_die 'Canonical Claude version already exists with different bytes.'
+        fi
     fi
-    [[ -d "$directory/original" ]] || hcc_die 'Original-entry record missing.'
-    hcc_verify_snapshot "$directory/original"
-    if [[ "$tool" == agy && -f "$directory/alias-installed" ]]; then hcc_verify_snapshot "$directory/alias-original"; fi
-    hcc_restore "$directory/original" "$entry"
-    if [[ "$tool" == agy && -f "$directory/alias-installed" ]]; then
-        hcc_restore "$directory/alias-original" "$alias"; rm -- "$directory/alias-installed"
+    stage=$(mktemp -d "$HCC_ROOT/staging/uninstall.$tool.XXXXXX")
+    printf '%s\n' native-uninstall "$stage" > "$stage/journal"
+    ln -T -- "$stage/journal" "$directory/pending" || hcc_die 'Cannot reserve native handoff journal.'
+    NATIVE_JOURNAL="$directory/pending"
+    if [[ "$tool" == agy ]]; then
+        if (( primary_needed )); then
+            hcc_native_slot "$entry" "$SELECT_BINARY" "$SELECT_DIGEST"; primary_slot=$NATIVE_SLOT
+        fi
+        if (( alias_needed )); then
+            hcc_native_link_slot "$alias" "$entry"; alias_slot=$NATIVE_SLOT
+        fi
+        if (( primary_needed )); then hcc_native_publish "$entry" "$primary_slot" "$primary_before"; fi
+        if (( alias_needed )); then hcc_native_publish "$alias" "$alias_slot" "$alias_before"; fi
+        if (( primary_needed )); then
+            [[ -f "$entry" && ! -L "$entry" && $(hcc_hash "$entry") == "$SELECT_DIGEST" ]] || hcc_die 'Native AGY handoff changed; preserve recovery.'
+        else [[ $(hcc_fingerprint "$entry") == "$primary_before" ]] || hcc_die 'Independent native entry changed; preserve recovery.'; fi
+        if (( alias_needed )); then
+            [[ -L "$alias" && $(readlink -- "$alias") == "$entry" ]] || hcc_die 'Native AGY alias changed; preserve recovery.'
+        else [[ $(hcc_fingerprint "$alias") == "$alias_before" ]] || hcc_die 'Independent native alias changed; preserve recovery.'; fi
+    elif (( primary_needed )); then
+        if [[ ! -e "$native" ]]; then
+            hcc_native_slot "$native" "$SELECT_BINARY" "$SELECT_DIGEST"; canonical_slot=$NATIVE_SLOT
+            hcc_native_publish "$native" "$canonical_slot" absent
+        fi
+        hcc_native_link_slot "$entry" "$native"; alias_slot=$NATIVE_SLOT
+        hcc_native_publish "$entry" "$alias_slot" "$primary_before"
+        [[ $(hcc_hash "$native") == "$SELECT_DIGEST" && -L "$entry" && $(readlink -- "$entry") == "$native" ]] || hcc_die 'Native Claude handoff changed; preserve recovery.'
+    else [[ $(hcc_fingerprint "$entry") == "$primary_before" ]] || hcc_die 'Independent native entry changed; preserve recovery.'; fi
+    # Native paths and their resolved parents no longer depend on the HCC store.
+    [[ $(realpath -e -- "$entry") != "$HCC_ROOT/"* ]] || hcc_die 'Entry still depends on HCC state.'
+    [[ "$tool" != agy || $(realpath -e -- "$alias") != "$HCC_ROOT/"* ]] || hcc_die 'Alias still depends on HCC state.'
+    [[ -z "$primary_slot" ]] || hcc_native_cleanup_slot "$primary_slot" "$primary_before"
+    [[ -z "$canonical_slot" ]] || hcc_native_cleanup_slot "$canonical_slot" absent
+    if [[ -n "$alias_slot" ]]; then
+        if [[ "$tool" == agy ]]; then hcc_native_cleanup_slot "$alias_slot" "$alias_before";
+        else hcc_native_cleanup_slot "$alias_slot" "$primary_before"; fi
     fi
-    rm -- "$directory/installed"
-    hcc_log "$tool launchers restored. Downloaded binaries, backups, and user data were retained."
+    rm -rf -- "$directory" "$HCC_ROOT/releases/$tool" "$stage"
+    hcc_log "$tool compatibility removed; current version retained in native layout. Native CPU compatibility is not guaranteed."
+}
+hcc_uninstall_shared_cleanup() {
+    # Keep lock inodes stable for installers already waiting on them.
+    if [[ ! -L "$HCC_ROOT/tools/agy/current" && ! -e "$HCC_ROOT/tools/agy/pending" && ! -e "$HCC_ROOT/watch/pending" && ! -e "$HCC_ROOT/watch/enabled" ]] &&
+       [[ -e "$HCC_ROOT/watch/owned" || -L "$HCC_ROOT/watch/owned" ]]; then
+        hcc_watch_init
+        if (( ${#WRECORD[@]} )); then
+            hcc_watch_validate_units
+            rm -rf -- "$WDIR/units"
+            rm -- "$WDIR/owned"
+        fi
+    fi
+    if [[ ! -L "$HCC_ROOT/tools/claude/current" && ! -L "$HCC_ROOT/tools/agy/current" && ! -e "$HCC_ROOT/tools/claude/pending" && ! -e "$HCC_ROOT/tools/agy/pending" && ! -e "$HCC_ROOT/watch/pending" && ! -e "$HCC_ROOT/watch/enabled" ]]; then
+        rm -rf -- "$HCC_ROOT/program"
+    fi
 }

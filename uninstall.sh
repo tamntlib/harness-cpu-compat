@@ -96,21 +96,21 @@ while (( $# )); do
     esac
 done
 case "$tool" in claude|agy) HCC_TOOLS=("$tool");; all) HCC_TOOLS=(claude agy);; *) hcc_die 'Invalid tool.';; esac
-for dependency in realpath sha256sum readlink dirname; do hcc_need "$dependency"; done
+for dependency in uname realpath sha256sum readlink dirname cmp; do hcc_need "$dependency"; done
 hcc_paths
-if (( dry )); then hcc_readonly; printf 'PLAN: restore only owned entries; retain binaries, backups, credentials and user data.\n'; exit 0; fi
+if (( dry )); then hcc_readonly; printf 'PLAN: retain current versions in native vendor paths, remove HCC compatibility/state, preserve user data and QEMU. Native CPU compatibility is not guaranteed.\n'; exit 0; fi
 [[ -d "$HCC_ROOT" ]] || { printf 'Nothing installed.\n'; exit 0; }
 if (( ! yes )); then
     [[ -t 0 ]] || hcc_die 'Use --yes for a noninteractive uninstall.'
-    printf 'Restore original %s entries? Close IDE sessions first. [y/N]: ' "$tool" >&2
+    printf 'Remove %s compatibility and keep current versions in native layout? Native execution may fail on this CPU. Close IDE sessions first. [y/N]: ' "$tool" >&2
     read -r answer; [[ "$answer" == y || "$answer" == Y ]] || exit 0
 fi
-hcc_need flock
+for dependency in flock cp chmod mkdir mktemp ln mv rm stat basename head; do hcc_need "$dependency"; done
 for selected in "${HCC_TOOLS[@]}"; do
     if [[ "$selected" == agy ]]; then
         hcc_watch_control_lock
         # A first install may have completed while this process waited for the lock.
-        if [[ -f "$HCC_ROOT/tools/agy/installed" || -e "$HCC_ROOT/watch/owned" || -e "$HCC_ROOT/watch/enabled" ]]; then
+        if [[ -L "$HCC_ROOT/tools/agy/current" || -e "$HCC_ROOT/tools/agy/pending" || -e "$HCC_ROOT/watch/owned" || -e "$HCC_ROOT/watch/enabled" ]]; then
             hcc_watch_claim_acquire; HCC_UNINSTALL_CLAIM_HELD=1
             if [[ -e "$HCC_ROOT/watch/owned" || -e "$HCC_ROOT/watch/enabled" ]]; then hcc_watch_disable keep-lock; fi
         fi
@@ -119,6 +119,7 @@ done
 exec 9> "$HCC_ROOT/operation.lock"
 flock -w 30 9 || hcc_die 'Another operation holds the installation lock.'
 for tool in "${HCC_TOOLS[@]}"; do hcc_uninstall_tool "$tool"; done
+hcc_uninstall_shared_cleanup
 if (( HCC_UNINSTALL_CLAIM_HELD )); then hcc_watch_claim_release; fi
 flock -u 9; exec 9>&-
 hcc_watch_control_unlock

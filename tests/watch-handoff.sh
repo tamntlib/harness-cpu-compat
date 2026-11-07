@@ -19,19 +19,15 @@ for mode in watched ordinary; do
         root="$HOME/.local/share/harness-cpu-compat"
         [[ ! -e "$root/watch/owned" && ! -e "$HOME/.gemini/bin/.hcc-watch-owner" ]] || fail 'ordinary fixture unexpectedly owned a watcher'
     fi
-    cat > "$work/$mode/fixture/bin/rm" <<'FIXTURE'
+    cat > "$work/$mode/fixture/bin/mv" <<'FIXTURE'
 #!/usr/bin/env bash
-if [[ ${HCC_HOLD_RESTORE:-0} == 1 ]]; then
- for arg; do
-  if [[ "$arg" == "$HOME/.gemini/bin/agy" ]]; then
-   touch "$HCC_RESTORE_READY"
-   for ((i=0;i<600;i++)); do [[ -f "$HCC_RESTORE_RELEASE" ]] && break; sleep .02; done
-  fi
- done
+if [[ ${HCC_HOLD_RESTORE:-0} == 1 && ${!#} == *'/captured' && "$PWD" == "$HOME/.gemini/bin" ]]; then
+ touch "$HCC_RESTORE_READY"
+ for ((i=0;i<600;i++)); do [[ -f "$HCC_RESTORE_RELEASE" ]] && break; sleep .02; done
 fi
-exec /usr/bin/rm "$@"
+exec /usr/bin/mv "$@"
 FIXTURE
-    chmod +x "$work/$mode/fixture/bin/rm"
+    chmod +x "$work/$mode/fixture/bin/mv"
     rm -f "$work/release"
     HCC_HOLD_RESTORE=1 HCC_RESTORE_READY="$work/$mode/ready" HCC_RESTORE_RELEASE="$work/release" bash "$repo/uninstall.sh" --tool agy --yes > "$work/$mode/uninstall.log" 2>&1 &
     pid=$!
@@ -47,7 +43,7 @@ FIXTURE
     pid=
     set -e
     [[ $plain != 0 && $second != 0 && $first == 0 && ! -e "$HOME/plain-state" && ! -e "$HOME/second-state" ]] || fail "global ownership was released before $mode entry restoration completed"
-    [[ ! -e "$HOME/.gemini/bin/.hcc-watch-owner" && ! -e "$HOME/.gemini/bin/agy" && ! -L "$HOME/.gemini/bin/agy" && ! -e "$HOME/.local/bin/agy" ]] || fail 'completed uninstall retained reservation or entries'
+    [[ ! -e "$HOME/.gemini/bin/.hcc-watch-owner" && -f "$HOME/.gemini/bin/agy" && ! -L "$HOME/.gemini/bin/agy" && $(readlink "$HOME/.local/bin/agy") == "$HOME/.gemini/bin/agy" ]] || fail 'completed uninstall did not release reservation with native entries'
     # A new root may take ownership only after restoration is complete.
     HCC_STATE_DIR="$HOME/second-state" bash "$repo/install.sh" --tool agy --from-binary "$binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$qemu" --auto-repair --yes > "$work/$mode/handoff.log" 2>&1
     [[ $(< "$HOME/.gemini/bin/.hcc-watch-owner") == "$HOME/second-state" && $("$HOME/.gemini/bin/agy" --version) == 1.0.0 ]] || fail 'completed uninstall stranded global ownership'

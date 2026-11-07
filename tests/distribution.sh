@@ -53,5 +53,5 @@ printf corrupt >> "$HCC_FIXTURES/agy.tar.gz"
 if bash "$repo/install.sh" --tool agy --yes >/dev/null 2>&1; then fail 'corrupt publisher payload accepted'; fi
 [[ $("$HOME/.gemini/bin/agy" --version) == 1.0.1 ]] || fail 'bad download replaced active release'
 bash "$repo/uninstall.sh" --tool all --yes >/dev/null
-[[ ! -e "$HOME/.local/bin/claude" && ! -L "$HOME/.local/bin/claude" ]] || fail 'fresh Claude symlink not removed'
+[[ $("$HOME/.local/bin/claude" --version) == 1.0.1 && $(readlink "$HOME/.local/bin/claude") == "$HOME/.local/share/claude/versions/1.0.1" ]] || fail 'current native Claude not retained'
 printf 'PASS distribution: synthetic publisher manifests/downloads, native direct execution, two-tool managed update, retained fallback, checksum rejection\n'
