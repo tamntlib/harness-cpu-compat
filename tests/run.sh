@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
+export TMPDIR=${TMPDIR:-${RUNNER_TEMP:-$HOME/.cache/harness-cpu-compat-tests}}
+mkdir -p -- "$TMPDIR"
+for source in "$repo/install.sh" "$repo/uninstall.sh" "$repo"/lib/*.sh "$repo"/tests/*.sh; do bash -n "$source"; done
+for suite in runtime lifecycle robustness distribution safety transactions paths; do bash "$repo/tests/$suite.sh"; done
+printf 'PASS all offline suites\n'
