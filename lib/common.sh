@@ -146,16 +146,36 @@ hcc_probe_pair() {
     [[ "$reported" == "${HCC_VERSION%%[-+]*}" ]] || return 1
     hcc_probe_command "$stage" --help "$@"
 }
+hcc_install_qemu() {
+    command -v apt-get >/dev/null 2>&1 || hcc_die 'Automatic QEMU installation requires APT (Debian/Ubuntu); install qemu-user manually on this system.'
+    local privilege=()
+    if (( EUID != 0 )); then
+        command -v sudo >/dev/null 2>&1 || hcc_die 'Installing qemu-user requires sudo or root; install it manually, then rerun as the intended user.'
+        privilege=(sudo --)
+    fi
+    hcc_log 'QEMU is missing: installing system package qemu-user through APT. Sudo may ask for your password.'
+    hcc_log 'System package changes are retained even if a later application install fails; uninstall.sh does not remove QEMU.'
+    # Package scripts must not inherit this installation's management/operation locks.
+    ( umask 022; "${privilege[@]}" apt-get update ) 8>&- 9>&- || hcc_die 'APT update failed (including possible sudo authentication failure); the current tool was not published.'
+    ( umask 022; "${privilege[@]}" apt-get install -y --no-install-recommends --reinstall qemu-user ) 8>&- 9>&- || hcc_die 'APT qemu-user installation failed; the current tool was not published.'
+}
 hcc_probe() {
-    local stage=$1 requested=$2 qemu=$3
+    local stage=$1 requested=$2 qemu=$3 allow_package_install=${4:-0}
     mkdir -m 700 -- "$stage/probe-home"
     if [[ "$requested" != qemu ]]; then
         if hcc_probe_pair "$stage" "$stage/binary"; then HCC_MODE=native; HCC_QEMU=; return; fi
         [[ "$requested" != native ]] || hcc_die 'Native version/help probe failed; nothing selected.'
         hcc_log 'Native version/help probe failed. Trying QEMU; this alone does not identify the exact CPU fault.'
     fi
-    if [[ -z "$qemu" ]]; then qemu=$(command -v qemu-x86_64 || true); fi
-    [[ -n "$qemu" && -x "$qemu" ]] || hcc_die 'QEMU is required for emulation; install qemu-user separately.'
+    if [[ -z "$qemu" ]]; then
+        qemu=$(command -v qemu-x86_64 || true)
+        if [[ ( -z "$qemu" || ! -x "$qemu" ) && "$allow_package_install" == 1 ]]; then
+            hcc_install_qemu
+            hash -r
+            qemu=$(command -v qemu-x86_64 || true)
+        fi
+    fi
+    [[ -n "$qemu" && -x "$qemu" ]] || hcc_die 'QEMU is required for emulation; install qemu-user or rerun the foreground installer without an invalid --qemu override.'
     HCC_QEMU=$(realpath -- "$qemu")
     hcc_plain_path "$HCC_QEMU" || hcc_die 'Invalid QEMU path.'
     hcc_probe_pair "$stage" "$HCC_QEMU" -cpu max "$stage/binary" || hcc_die 'QEMU version/help probe failed; nothing selected.'
@@ -238,7 +258,7 @@ hcc_install_tool() {
     stage=$(mktemp -d "$HCC_ROOT/staging/$tool.XXXXXX")
     HCC_STAGE=$stage
     hcc_acquire "$tool" "$stage" "$HCC_REQUEST_VERSION" "$HCC_FROM" "$HCC_EXPECTED"
-    hcc_probe "$stage" "$HCC_REQUEST_MODE" "$HCC_REQUEST_QEMU"
+    hcc_probe "$stage" "$HCC_REQUEST_MODE" "$HCC_REQUEST_QEMU" 1
     engine_key=$(printf '%s\n' "$HCC_MODE" "$HCC_QEMU" | sha256sum); engine_key=${engine_key%% *}
     release="$HCC_ROOT/releases/$tool/$HCC_VERSION-$HCC_DIGEST-$HCC_MODE-${engine_key:0:12}"
     if [[ -e "$release" ]]; then

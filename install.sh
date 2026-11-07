@@ -93,7 +93,7 @@ usage() {
       'Options: --version latest|stable|X.Y.Z, --qemu /absolute/path, --repair' \
       'Local import: --from-binary PATH --version X.Y.Z --sha256 DIGEST' \
       'AGY auto-repair: --auto-repair (opt in after install), --no-auto-repair (disable only)' \
-      'Rerun this installer to update. No IDE JavaScript is patched.'
+      'Rerun this installer to update. Missing QEMU is installed via APT (sudo when needed). No IDE JavaScript is patched.'
 }
 HCC_WATCH_CONTROL_HELD=0; HCC_WATCH_CLAIM_NEW=0
 HCC_TOOL=; HCC_YES=0; HCC_DOCTOR=0; HCC_DRY=0; HCC_REPAIR=0; HCC_WATCH_ACTION=none
@@ -148,7 +148,7 @@ for tool in "${HCC_TOOLS[@]}"; do hcc_check_existing "$tool"; done
 if [[ "$HCC_WATCH_ACTION" == --auto-repair ]]; then hcc_watch_init; hcc_watch_validate_units; hcc_watch_manager_check; fi
 if (( ! HCC_YES )); then
     [[ -t 0 ]] || hcc_die 'Use --yes for a noninteractive installation.'
-    printf 'Install %s in this user account? Existing entries will be backed up. Close IDE sessions first. [y/N]: ' "$HCC_TOOL" >&2
+    printf 'Install %s in this user account? Existing entries will be backed up. If emulation needs missing QEMU, APT will install system package qemu-user (sudo when needed). Close IDE sessions first. [y/N]: ' "$HCC_TOOL" >&2
     read -r answer; [[ "$answer" == y || "$answer" == Y ]] || exit 0
 fi
 umask 077

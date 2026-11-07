@@ -6,7 +6,7 @@ User-scoped Shell installers for **Claude Code** and **Antigravity CLI (`agy`)**
 
 ## Install
 
-Requirements: Linux x86_64, Bash 4.4+, GNU coreutils, `flock`, `curl`, `jq`, `tar`, and normal system CA certificates. Emulation additionally needs **`qemu-x86_64`** (usually the `qemu-user` package). Install dependencies with your distribution's package manager; these scripts never run sudo or install packages. There is no Python, npm, or separate Node.js dependency.
+Requirements: Linux x86_64, Bash 4.4+, GNU coreutils, `flock`, `curl`, `jq`, `tar`, and normal system CA certificates. If emulation is needed and `qemu-x86_64` is missing, the foreground installer automatically installs **`qemu-user` through APT on Debian/Ubuntu**, using ordinary sudo when not root. Other dependencies must already be installed; on non-APT systems install QEMU manually. There is no Python, npm, or separate Node.js dependency.
 
 No clone is required:
 
@@ -26,7 +26,7 @@ cd harness-cpu-compat
 ./install.sh --tool agy
 ```
 
-Without `--tool`, an interactive terminal asks which tool to install. Noninteractive runs require `--tool` and `--yes`. Install as the intended user, not with sudo. Add `$HOME/.local/bin` to `PATH` if it is not already present; shell profiles are not edited automatically.
+Without `--tool`, an interactive terminal asks which tool to install. Noninteractive runs require `--tool` and `--yes`. Install as the intended user, not with sudo. Confirmation (or `--yes`) also accepts conditional system-package installation; it does not provide sudo credentials. Without a controlling terminal or cached authentication, sudo may fail. Package installation runs `apt-get update` then `apt-get install -y --no-install-recommends --reinstall qemu-user`; it does not run a general upgrade. Package changes remain if later application checks fail, and uninstall never removes QEMU. Add `$HOME/.local/bin` to `PATH` if it is not already present; shell profiles are not edited automatically.
 
 ```bash
 claude --version
@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/tamntlib/harness-cpu-compat/main/un
   | bash -s -- --tool all --yes
 ```
 
-When piped or run as a standalone file without its sibling bundle, either entrypoint downloads one complete `main` source archive over HTTPS. The bootstrap uses a private temporary directory under `TMPDIR`, or HOME when unset, validates all five required regular Shell files, then forwards arguments and child status and removes its temporary files. It never extracts archive-controlled paths into your filesystem. It requires existing `curl`, GNU `tar`, `timeout`, and GNU `env` with `--default-signal` support; it installs no dependencies. Piped execution is noninteractive: use `--yes` for mutations. A standalone script retains its normal stdin.
+When piped or run as a standalone file without its sibling bundle, either entrypoint downloads one complete `main` source archive over HTTPS. The bootstrap uses a private temporary directory under `TMPDIR`, or HOME when unset, validates all five required regular Shell files, then forwards arguments and child status and removes its temporary files. It never extracts archive-controlled paths into your filesystem. It requires existing `curl`, GNU `tar`, `timeout`, and GNU `env` with `--default-signal` support; the bootstrap itself installs no dependencies, but its foreground installer may install QEMU as described above. Piped execution is noninteractive: use `--yes` for mutations. A standalone script retains its normal stdin.
 
 `main` is mutable: bootstrap follows the current main archive, **not** the raw script's revision, and HTTPS is not an independent code signature. Review the source before execution. Use a complete checkout/archive at an exact commit for a pinned, offline script bundle. A complete local bundle bypasses bootstrap entirely; installed launchers use retained private copies, not the temporary source directory.
 
@@ -69,7 +69,7 @@ For exact versions, Claude accepts `--version X.Y.Z`, `stable`, or `latest`. AGY
   --version 1.5.2 --sha256 '<expected-sha256>' --mode qemu
 ```
 
-`--mode native` requires both native probes to pass. `--mode qemu` explicitly selects emulation. `--qemu /absolute/path` selects an existing emulator. `HCC_PROBE_TIMEOUT=30` changes each probe's timeout (1–99 seconds).
+`--mode native` requires both native probes to pass. `--mode qemu` explicitly selects emulation. `--qemu /absolute/path` selects an existing emulator; an invalid explicit path is refused, not replaced through APT. An existing emulator that fails probes is also refused without reinstalling. Native success never installs QEMU. Runtime launches, background repair, doctor, dry-run, disabling repair, and uninstall never invoke APT or sudo. `HCC_PROBE_TIMEOUT=30` changes each probe's timeout (1–99 seconds).
 
 ## Optional AGY auto-repair — off by default
 
@@ -81,7 +81,7 @@ For exact versions, Claude accepts `--version X.Y.Z`, `stable`, or `latest`. AGY
 
 `--repair` repairs once in the foreground; `--auto-repair` enables the background watcher described below. It does not proactively update AGY. The former `--watch-agy` / `--no-watch-agy` option names are no longer accepted.
 
-The watcher requires an already available **systemd user manager**; non-systemd installations remain supported with the default off. No sudo, system-level unit, inotify-tools, IDE patch, or extra language runtime is installed. An ordinary rerun without watcher flags preserves an earlier explicit opt-in. Claude-only and contradictory watcher flags are refused. Uninstalling AGY stops/removes its owned watcher before restoring entries; a subsequent refusal to restore a foreign entry does not re-enable it.
+The watcher requires an already available **systemd user manager**; non-systemd installations remain supported with the default off. The watcher itself never invokes sudo or installs packages, system-level units, inotify-tools, IDE patches, or extra language runtimes; its foreground installation may install missing QEMU as above. An ordinary rerun without watcher flags preserves an earlier explicit opt-in. Claude-only and contradictory watcher flags are refused. Uninstalling AGY stops/removes its owned watcher before restoring entries; a subsequent refusal to restore a foreign entry does not re-enable it.
 
 Opt-in creates a state-root-specific user `.path`, bounded oneshot `.service`, and startup/periodic `.timer` in the user unit directory. The directory watch detects rename/replacement; the exact-file watch detects close-after-write. The fallback starts around 30 seconds after activation and rechecks around five minutes after an inactive service, subject to timer accuracy and execution time—not a hard recovery deadline. The service has a two-CPU quota, 1 GiB memory ceiling, no swap, task/time limits and control-group probe cleanup. It does **not** own, kill, restart, or reload your IDE/hub sessions.
 
@@ -120,7 +120,7 @@ Close IDE and CLI sessions before install, update, repair, or removal. The lock 
 bash tests/run.sh       # offline, synthetic fixtures only; no accounts/vendor bundles
 ```
 
-The seventeen offline suites cover argument/stream/signal transparency, native selection and help failures, checksums and escaped filenames, managed version changes and retained fallbacks, repeat install/uninstall, corrupted backups, rollback, SIGKILL recovery refusal, default-off watcher management, exact-artifact reconciliation, no-clobber races, open writers, concurrent ownership reservations, cross-root uninstall handoff, first-install/uninstall concurrency, and piped/standalone bootstrap acquisition, archive guards, argument/status forwarding, signals and cleanup. They mock the publisher/systemd management; real event handling is tested separately.
+The eighteen offline suites cover argument/stream/signal transparency, native selection and help failures, checksums and escaped filenames, managed version changes and retained fallbacks, repeat install/uninstall, corrupted backups, rollback, SIGKILL recovery refusal, default-off watcher management, exact-artifact reconciliation, no-clobber races, open writers, concurrent ownership reservations, cross-root uninstall handoff, first-install/uninstall concurrency, and piped/standalone bootstrap acquisition, archive guards, argument/status forwarding, signals and cleanup. QEMU dependency tests isolate PATH completely and use fake APT/sudo to verify conditional installation, lock-descriptor isolation, failures without entry publication, reuse, and background/read-only boundaries. They mock the publisher/systemd management; real event handling is tested separately.
 
 An opt-in vendor smoke test downloads real binaries and creates a disposable HOME:
 
@@ -137,6 +137,8 @@ Additional opt-in acceptance scripts:
 On a shared VPS, run tests serially under a separate user cgroup with at most two CPUs, explicit memory/time limits, and headroom for existing services.
 
 Verified on **2026-11-07**, in isolation on a generic KVM/QEMU CPU lacking modern instructions:
+
+- In a disposable Ubuntu 24.04 container, missing QEMU is installed through real APT, AGY 1.5.3 passes version/help, deletion of only the container's emulator is repaired through package reinstall, and uninstall retains QEMU. Effective limits were two CPUs (affinity 0–1), 1 GiB RAM and zero swap. This exercises the root package branch; sudo/authentication behavior is covered with offline shims, not real credential prompts. The host QEMU installation was not modified.
 
 - Claude Code **2.1.319**, binary SHA-256 `dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed`: official download verified; QEMU `--version` and `--help` pass.
 - AGY **1.5.2** and **1.5.3**: official payloads verified; wrapper `--version`, `--help`, and isolated `--hub` health endpoint HTTP **200** pass; hub stops on TERM. Version 1.5.3 binary SHA-256: `7ca212748ca0dfda718efbc39a776a104472e7e9344d4b6ea147c543684f96a3`.
