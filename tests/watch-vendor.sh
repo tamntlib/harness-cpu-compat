@@ -28,7 +28,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$work/bin/systemctl"; chmod +x "$work/
 export PATH="$work/bin:$PATH"
 # Management is mocked only to avoid installing persistent units on the host.
 # Identical generated unit files are subsequently linked into the real manager at runtime.
-bash "$repo/install.sh" --tool agy --yes --mode qemu --from-binary "$HCC_PREVIOUS_AGY_BINARY" --version "$HCC_PREVIOUS_AGY_VERSION" --sha256 "$HCC_PREVIOUS_AGY_SHA256" --watch-agy
+bash "$repo/install.sh" --tool agy --yes --mode qemu --from-binary "$HCC_PREVIOUS_AGY_BINARY" --version "$HCC_PREVIOUS_AGY_VERSION" --sha256 "$HCC_PREVIOUS_AGY_SHA256" --auto-repair
 root="$HOME/.local/share/harness-cpu-compat"
 old=$(readlink "$root/tools/agy/current")
 mapfile -t record < "$root/watch/owned"; base=${record[0]}; config=${record[1]}

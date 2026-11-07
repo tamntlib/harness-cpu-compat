@@ -49,6 +49,6 @@ FIXTURE
     export PATH="$directory/bin:$WF_BASE_PATH"
     wf_binary 1.0.0 "$directory/original-binary"
     local digest; digest=$(sha256sum < "$directory/original-binary");digest=${digest%% *}
-    bash "$repo/install.sh" --tool agy --from-binary "$directory/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$directory/bin/qemu" --watch-agy --yes > "$directory/install.log" 2>&1
+    bash "$repo/install.sh" --tool agy --from-binary "$directory/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$directory/bin/qemu" --auto-repair --yes > "$directory/install.log" 2>&1
     root="$HOME/.local/share/harness-cpu-compat"
 }

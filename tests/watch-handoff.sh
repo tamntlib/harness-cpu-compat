@@ -13,7 +13,7 @@ for mode in watched ordinary; do
     binary="$work/$mode/fixture/original-binary"; qemu="$work/$mode/fixture/bin/qemu"
     digest=$(sha256sum < "$binary");digest=${digest%% *}
     if [[ "$mode" == ordinary ]]; then
-        bash "$repo/install.sh" --tool agy --no-watch-agy --yes > /dev/null 2>&1
+        bash "$repo/install.sh" --tool agy --no-auto-repair --yes > /dev/null 2>&1
         export HOME="$work/$mode/home"; mkdir -p "$HOME"
         bash "$repo/install.sh" --tool agy --from-binary "$binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$qemu" --yes > "$work/$mode/initial.log" 2>&1
         root="$HOME/.local/share/harness-cpu-compat"
@@ -40,7 +40,7 @@ FIXTURE
     set +e
     HCC_STATE_DIR="$HOME/plain-state" bash "$repo/install.sh" --tool agy --from-binary "$binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$qemu" --yes > "$work/$mode/plain-blocked.log" 2>&1
     plain=$?
-    HCC_STATE_DIR="$HOME/second-state" bash "$repo/install.sh" --tool agy --from-binary "$binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$qemu" --watch-agy --yes > "$work/$mode/blocked.log" 2>&1
+    HCC_STATE_DIR="$HOME/second-state" bash "$repo/install.sh" --tool agy --from-binary "$binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$qemu" --auto-repair --yes > "$work/$mode/blocked.log" 2>&1
     second=$?
     touch "$work/release"
     wait "$pid"; first=$?
@@ -49,7 +49,7 @@ FIXTURE
     [[ $plain != 0 && $second != 0 && $first == 0 && ! -e "$HOME/plain-state" && ! -e "$HOME/second-state" ]] || fail "global ownership was released before $mode entry restoration completed"
     [[ ! -e "$HOME/.gemini/bin/.hcc-watch-owner" && ! -e "$HOME/.gemini/bin/agy" && ! -L "$HOME/.gemini/bin/agy" && ! -e "$HOME/.local/bin/agy" ]] || fail 'completed uninstall retained reservation or entries'
     # A new root may take ownership only after restoration is complete.
-    HCC_STATE_DIR="$HOME/second-state" bash "$repo/install.sh" --tool agy --from-binary "$binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$qemu" --watch-agy --yes > "$work/$mode/handoff.log" 2>&1
+    HCC_STATE_DIR="$HOME/second-state" bash "$repo/install.sh" --tool agy --from-binary "$binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$qemu" --auto-repair --yes > "$work/$mode/handoff.log" 2>&1
     [[ $(< "$HOME/.gemini/bin/.hcc-watch-owner") == "$HOME/second-state" && $("$HOME/.gemini/bin/agy" --version) == 1.0.0 ]] || fail 'completed uninstall stranded global ownership'
 done
 printf 'PASS watcher handoff: watched and ordinary uninstall retain global claim through restoration, then allow a new root\n'

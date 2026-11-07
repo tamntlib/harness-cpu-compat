@@ -29,7 +29,7 @@ unknown=$(sha256sum "$HOME/.gemini/bin/agy")
 if bash "$repo/lib/watch.sh" --reconcile "$root" "$HOME" > "$work/rejected.log" 2>&1; then fail 'unknown publisher mismatch accepted'; fi
 [[ ! -e "$work/UNTRUSTED_EXECUTED" && $(sha256sum "$HOME/.gemini/bin/agy") == "$unknown" && $(readlink "$root/tools/agy/current") == "$selected" ]] || fail 'rejection executed or overwrote untrusted candidate'
 # The disabled worker is a no-op even if a conflicting entry remains.
-bash "$repo/install.sh" --tool agy --no-watch-agy --yes
+bash "$repo/install.sh" --tool agy --no-auto-repair --yes
 before=$(sha256sum "$HCC_NETWORK_LOG")
 bash "$repo/lib/watch.sh" --reconcile "$root" "$HOME"
 [[ $(sha256sum "$HCC_NETWORK_LOG") == "$before" ]] || fail 'disabled worker downloaded artifacts'

@@ -9,7 +9,7 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 WF_BASE_PATH=$PATH
 source "$repo/tests/watch-fixtures.sh"
 wf_init "$work/fixture"
-bash "$repo/install.sh" --tool agy --no-watch-agy --yes > /dev/null 2>&1
+bash "$repo/install.sh" --tool agy --no-auto-repair --yes > /dev/null 2>&1
 cat > "$work/fixture/bin/mv" <<'FIXTURE'
 #!/usr/bin/env bash
 last=${!#}; previous=${@: -2:1}
@@ -21,7 +21,7 @@ exec /usr/bin/mv "$@"
 FIXTURE
 chmod +x "$work/fixture/bin/mv"
 digest=$(sha256sum < "$work/fixture/original-binary");digest=${digest%% *}
-args=(--tool agy --from-binary "$work/fixture/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$work/fixture/bin/qemu" --watch-agy --yes)
+args=(--tool agy --from-binary "$work/fixture/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$work/fixture/bin/qemu" --auto-repair --yes)
 HCC_OWNER_HOLD=1 HCC_OWNER_READY="$work/ready" HCC_OWNER_RELEASE="$work/release" bash "$repo/install.sh" "${args[@]}" > "$work/first.log" 2>&1 &
 pid=$!
 for ((i=0;i<250;i++)); do [[ -f "$work/ready" ]] && break; sleep .02; done

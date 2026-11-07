@@ -17,12 +17,12 @@ exec /usr/bin/cp "$@"
 FIXTURE
 chmod +x "$work/copy/bin/cp"
 digest=$(sha256sum < "$work/copy/original-binary");digest=${digest%% *}
-args=(--tool agy --from-binary "$work/copy/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$work/copy/bin/qemu" --watch-agy --yes)
+args=(--tool agy --from-binary "$work/copy/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$work/copy/bin/qemu" --auto-repair --yes)
 snapshots() { for file in "$root/watch/units/"*; do [[ -f "$file" ]] && printf '%s %s\n' "$(sha256sum < "$file")" "$file"; done; }
 before=$(snapshots)
 HCC_BREAK_SNAPSHOT=1 bash "$repo/install.sh" "${args[@]}" > "$work/copy/refresh.log" 2>&1 || true
 [[ $(snapshots) == "$before" ]] || fail 're-enable I/O failure corrupted an existing watcher ownership baseline'
-bash "$repo/install.sh" --tool agy --no-watch-agy --yes > "$work/copy/disable.log" 2>&1 || fail 'unit refresh failure stranded watcher disable'
+bash "$repo/install.sh" --tool agy --no-auto-repair --yes > "$work/copy/disable.log" 2>&1 || fail 'unit refresh failure stranded watcher disable'
 # Concurrent install/disable or install/uninstall must serialize manager transitions, not only files.
 for operation in disable uninstall; do
     wf_init "$work/$operation"
@@ -52,14 +52,14 @@ exec /usr/bin/mv "$@"
 FIXTURE
     chmod +x "$work/$operation/bin/"*
     digest=$(sha256sum < "$work/$operation/original-binary");digest=${digest%% *}
-    args=(--tool agy --from-binary "$work/$operation/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$work/$operation/bin/qemu" --watch-agy --yes)
+    args=(--tool agy --from-binary "$work/$operation/original-binary" --version 1.0.0 --sha256 "$digest" --mode qemu --qemu "$work/$operation/bin/qemu" --auto-repair --yes)
     rm -f "$work/release"
     HCC_HOLD_INSTALL=1 HCC_INSTALL_READY="$work/$operation/install-ready" HCC_INSTALL_RELEASE="$work/release" bash "$repo/install.sh" "${args[@]}" > "$work/$operation/install.log" 2>&1 &
     pid=$!
     for ((i=0;i<250;i++)); do [[ -f "$work/$operation/install-ready" ]] && break; sleep .02; done
     [[ -f "$work/$operation/install-ready" ]] || fail 'installer did not reach deterministic management race gate'
     if [[ "$operation" == disable ]]; then
-        HCC_IS_DISABLE=1 bash "$repo/install.sh" --tool agy --no-watch-agy --yes > "$work/$operation/disable.log" 2>&1 &
+        HCC_IS_DISABLE=1 bash "$repo/install.sh" --tool agy --no-auto-repair --yes > "$work/$operation/disable.log" 2>&1 &
     else
         HCC_IS_DISABLE=1 bash "$repo/uninstall.sh" --tool agy --yes > "$work/$operation/disable.log" 2>&1 &
     fi

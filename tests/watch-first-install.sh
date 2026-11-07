@@ -47,7 +47,7 @@ FIXTURE
     chmod +x "$HCC_GATE/binary" "$HCC_GATE/bin/"*
     digest=$(sha256sum < "$HCC_GATE/binary"); digest=${digest%% *}
     args=(--tool agy --from-binary "$HCC_GATE/binary" --version 1.0.0 --sha256 "$digest" --mode native --yes)
-    watch=(); [[ "$mode" != watched ]] || watch=(--watch-agy)
+    watch=(); [[ "$mode" != watched ]] || watch=(--auto-repair)
     HCC_HOLD_INSTALL=1 bash "$repo/install.sh" "${args[@]}" "${watch[@]}" > "$HCC_GATE/install.log" 2>&1 & installer=$!
     for ((i=0;i<500;i++)); do [[ -f "$HCC_GATE/install-ready" ]] && break; sleep .01; done
     [[ -f "$HCC_GATE/install-ready" ]] || fail 'first install did not reach publication gate'
@@ -63,7 +63,7 @@ FIXTURE
     second=1
     if [[ "$mode" == ordinary ]]; then
         set +e
-        HCC_STATE_DIR="$HOME/second-state" bash "$repo/install.sh" "${args[@]}" --watch-agy > "$HCC_GATE/second-install.log" 2>&1
+        HCC_STATE_DIR="$HOME/second-state" bash "$repo/install.sh" "${args[@]}" --auto-repair > "$HCC_GATE/second-install.log" 2>&1
         second=$?
         set -e
     fi

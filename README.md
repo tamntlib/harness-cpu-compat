@@ -51,13 +51,15 @@ For exact versions, Claude accepts `--version X.Y.Z`, `stable`, or `latest`. AGY
 
 `--mode native` requires both native probes to pass. `--mode qemu` explicitly selects emulation. `--qemu /absolute/path` selects an existing emulator. `HCC_PROBE_TIMEOUT=30` changes each probe's timeout (1–99 seconds).
 
-## Optional AGY watcher — off by default
+## Optional AGY auto-repair — off by default
 
 ```bash
-./install.sh --tool agy --watch-agy --yes      # install/update AGY, then opt in
-./install.sh --tool all --watch-agy --yes      # watcher applies only to AGY
-./install.sh --tool agy --no-watch-agy --yes   # disable only; no download/reinstall
+./install.sh --tool agy --auto-repair --yes    # install/update AGY, then opt in
+./install.sh --tool all --auto-repair --yes    # auto-repair applies only to AGY
+./install.sh --tool agy --no-auto-repair --yes # disable only; no download/reinstall
 ```
+
+`--repair` repairs once in the foreground; `--auto-repair` enables the background watcher described below. It does not proactively update AGY. The former `--watch-agy` / `--no-watch-agy` option names are no longer accepted.
 
 The watcher requires an already available **systemd user manager**; non-systemd installations remain supported with the default off. No sudo, system-level unit, inotify-tools, IDE patch, or extra language runtime is installed. An ordinary rerun without watcher flags preserves an earlier explicit opt-in. Claude-only and contradictory watcher flags are refused. Uninstalling AGY stops/removes its owned watcher before restoring entries; a subsequent refusal to restore a foreign entry does not re-enable it.
 
