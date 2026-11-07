@@ -8,6 +8,15 @@ User-scoped Shell installers for **Claude Code** and **Antigravity CLI (`agy`)**
 
 Requirements: Linux x86_64, Bash 4.4+, GNU coreutils, `flock`, `curl`, `jq`, `tar`, and normal system CA certificates. Emulation additionally needs **`qemu-x86_64`** (usually the `qemu-user` package). Install dependencies with your distribution's package manager; these scripts never run sudo or install packages. There is no Python, npm, or separate Node.js dependency.
 
+No clone is required:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tamntlib/harness-cpu-compat/main/install.sh \
+  | bash -s -- --tool all --yes
+```
+
+Or use a complete local checkout (no bootstrap download):
+
 ```bash
 git clone https://github.com/tamntlib/harness-cpu-compat.git
 cd harness-cpu-compat
@@ -38,7 +47,18 @@ Checksums fetched from the publisher are integrity checks, not independent signa
 ./uninstall.sh --tool all
 ```
 
-`--doctor` and `--dry-run` do not create directories, download anything, execute vendor binaries, or probe the emulator. Doctor reports entry ownership, selected paths/mode, stored binary checksums, and incomplete publication markers. It is an inspection report, not an authenticated readiness test.
+Removal also supports piping, without a checkout:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tamntlib/harness-cpu-compat/main/uninstall.sh \
+  | bash -s -- --tool all --yes
+```
+
+When piped or run as a standalone file without its sibling bundle, either entrypoint downloads one complete `main` source archive over HTTPS. The bootstrap uses a private temporary directory under `TMPDIR`, or HOME when unset, validates all five required regular Shell files, then forwards arguments and child status and removes its temporary files. It never extracts archive-controlled paths into your filesystem. It requires existing `curl`, GNU `tar`, `timeout`, and GNU `env` with `--default-signal` support; it installs no dependencies. Piped execution is noninteractive: use `--yes` for mutations. A standalone script retains its normal stdin.
+
+`main` is mutable: bootstrap follows the current main archive, **not** the raw script's revision, and HTTPS is not an independent code signature. Review the source before execution. Use a complete checkout/archive at an exact commit for a pinned, offline script bundle. A complete local bundle bypasses bootstrap entirely; installed launchers use retained private copies, not the temporary source directory.
+
+`--doctor` and `--dry-run` do not create persistent installation state, download vendor payloads, execute vendor binaries, or probe the emulator. With a complete local bundle they create no directories or downloads at all; piped/standalone use still downloads and temporarily stages the script bundle first. Doctor reports entry ownership, selected paths/mode, stored binary checksums, and incomplete publication markers. It is an inspection report, not an authenticated readiness test.
 
 **Use `install.sh` for updates while using this installation.** Direct vendor self-updates and IDE-managed acquisition are outside the managed-update contract; they may replace an entry or alter a private binary. No vendor update settings or environment variables are silently changed. `--repair` preserves a changed entry in `conflicts/` before replacing it. It does not merge vendor metadata, migrate credentials, or override an interrupted transaction. An altered stored release is refused rather than silently overwritten.
 
@@ -100,7 +120,7 @@ Close IDE and CLI sessions before install, update, repair, or removal. The lock 
 bash tests/run.sh       # offline, synthetic fixtures only; no accounts/vendor bundles
 ```
 
-The sixteen offline suites cover argument/stream/signal transparency, native selection and help failures, checksums and escaped filenames, managed version changes and retained fallbacks, repeat install/uninstall, corrupted backups, rollback, SIGKILL recovery refusal, default-off watcher management, exact-artifact reconciliation, no-clobber races, open writers, concurrent ownership reservations, cross-root uninstall handoff, and first-install/uninstall concurrency. They mock the publisher/systemd management; real event handling is tested separately.
+The seventeen offline suites cover argument/stream/signal transparency, native selection and help failures, checksums and escaped filenames, managed version changes and retained fallbacks, repeat install/uninstall, corrupted backups, rollback, SIGKILL recovery refusal, default-off watcher management, exact-artifact reconciliation, no-clobber races, open writers, concurrent ownership reservations, cross-root uninstall handoff, first-install/uninstall concurrency, and piped/standalone bootstrap acquisition, archive guards, argument/status forwarding, signals and cleanup. They mock the publisher/systemd management; real event handling is tested separately.
 
 An opt-in vendor smoke test downloads real binaries and creates a disposable HOME:
 
