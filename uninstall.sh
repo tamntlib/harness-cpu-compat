@@ -3,6 +3,8 @@ set -euo pipefail
 HCC_SOURCE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=lib/common.sh
 source "$HCC_SOURCE/lib/common.sh"
+source "$HCC_SOURCE/lib/watch.sh"
+HCC_WATCH_CONTROL_HELD=0; HCC_UNINSTALL_CLAIM_HELD=0
 tool=all; yes=0; dry=0
 while (( $# )); do
     case "$1" in
@@ -23,7 +25,19 @@ if (( ! yes )); then
     read -r answer; [[ "$answer" == y || "$answer" == Y ]] || exit 0
 fi
 hcc_need flock
+for selected in "${HCC_TOOLS[@]}"; do
+    if [[ "$selected" == agy ]]; then
+        hcc_watch_control_lock
+        # A first install may have completed while this process waited for the lock.
+        if [[ -f "$HCC_ROOT/tools/agy/installed" || -e "$HCC_ROOT/watch/owned" || -e "$HCC_ROOT/watch/enabled" ]]; then
+            hcc_watch_claim_acquire; HCC_UNINSTALL_CLAIM_HELD=1
+            if [[ -e "$HCC_ROOT/watch/owned" || -e "$HCC_ROOT/watch/enabled" ]]; then hcc_watch_disable keep-lock; fi
+        fi
+    fi
+done
 exec 9> "$HCC_ROOT/operation.lock"
 flock -w 30 9 || hcc_die 'Another operation holds the installation lock.'
 for tool in "${HCC_TOOLS[@]}"; do hcc_uninstall_tool "$tool"; done
+if (( HCC_UNINSTALL_CLAIM_HELD )); then hcc_watch_claim_release; fi
 flock -u 9; exec 9>&-
+hcc_watch_control_unlock

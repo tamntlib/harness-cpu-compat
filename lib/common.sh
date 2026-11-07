@@ -6,7 +6,7 @@ hcc_log() { printf '%s\n' "$*" >&2; }
 hcc_need() { command -v "$1" >/dev/null 2>&1 || hcc_die "Missing dependency: $1 (install it separately)."; }
 hcc_valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.-]+)?$ ]]; }
 hcc_plain_path() { [[ "$1" == /* && "$1" != *$'\n'* && "$1" != *$'\r'* ]]; }
-hcc_hash() { local line; line=$(sha256sum -- "$1"); printf '%s\n' "${line%% *}"; }
+hcc_hash() { local line; line=$(sha256sum < "$1"); printf '%s\n' "${line%% *}"; }
 hcc_fingerprint() {
     local p=$1
     if [[ -L "$p" ]]; then printf 'link:%s\n' "$(readlink -- "$p")";
@@ -112,7 +112,7 @@ hcc_acquire() {
         [[ "$url" == https://storage.googleapis.com/antigravity-public/* || "$url" == "$base/"* ]] || hcc_die 'Unexpected AGY artifact host/path.'
         payload="$stage/payload"
         hcc_download "$url" "$payload"
-        actual=$(sha512sum -- "$payload"); actual=${actual%% *}
+        actual=$(sha512sum < "$payload"); actual=${actual%% *}
         [[ "$actual" == "${expected,,}" ]] || hcc_die 'AGY checksum mismatch.'
         case "$url" in
             *.tar.gz|*.tgz)
@@ -163,7 +163,7 @@ hcc_probe() {
 }
 hcc_copy_program() {
     local relative source destination temporary
-    for relative in install.sh uninstall.sh lib/common.sh lib/runtime.sh; do
+    for relative in install.sh uninstall.sh lib/common.sh lib/runtime.sh lib/watch.sh; do
         source="$HCC_SOURCE/$relative"; destination="$HCC_ROOT/program/$relative"
         mkdir -m 700 -p -- "$(dirname -- "$destination")"
         if [[ -f "$destination" ]] && cmp -s -- "$source" "$destination"; then continue; fi
@@ -197,6 +197,7 @@ hcc_readonly() {
             fi
         else printf '  not managed\n'; fi
     done
+    for tool in "${HCC_TOOLS[@]}"; do [[ "$tool" != agy ]] || hcc_watch_report; done
     printf 'QEMU: %s\n' "$(command -v qemu-x86_64 || printf 'not found')"
     printf 'AGY IDE: experimental; its updater can replace the wrapper before execution.\n'
 }
@@ -204,7 +205,14 @@ hcc_check_existing() {
     local tool=$1 directory entry existing expected alias
     directory=$(hcc_tool_dir "$tool"); entry=$(hcc_entry "$tool")
     [[ ! -e "$directory/pending" && ! -L "$directory/pending" ]] || hcc_die "Incomplete publication: $directory/pending; preserve recovery snapshots and resolve it before retrying."
+    [[ "$tool" != agy || ! -e "$HCC_ROOT/watch/pending" ]] || hcc_die 'Incomplete watcher repair; preserve recovery material.'
     hcc_check_parent "$entry"
+    if [[ "$tool" == agy ]]; then
+        local claim="$HOME/.gemini/bin/.hcc-watch-owner"
+        if [[ -e "$claim" || -L "$claim" ]]; then
+            [[ -f "$claim" && ! -L "$claim" && -O "$claim" && "$(< "$claim")" == "$HCC_ROOT" ]] || hcc_die 'Another state directory or unsafe claim owns the AGY watcher.'
+        fi
+    fi
     existing=$(hcc_fingerprint "$entry")
     if [[ -f "$directory/installed" ]]; then
         expected=$(< "$directory/installed")
@@ -314,6 +322,10 @@ hcc_cleanup() {
         ); then hcc_log 'Publication failed; rolled back owned entries. Recovery snapshots retained.'
         else hcc_log 'Publication failed with drift or recovery failure; no further overwrite. Pending marker and recovery snapshots retained.'; fi
     elif [[ -n ${HCC_STAGE:-} && -d "$HCC_STAGE" ]]; then rm -rf -- "$HCC_STAGE"; fi
+    if [[ ${HCC_WATCH_CLAIM_NEW:-0} == 1 && ! -e "$HCC_ROOT/watch/enabled" ]]; then
+        local claim="$HOME/.gemini/bin/.hcc-watch-owner"
+        if [[ -f "$claim" && ! -L "$claim" && $(< "$claim") == "$HCC_ROOT" ]]; then rm -- "$claim"; fi
+    fi
     exit "$status"
 }
 hcc_uninstall_tool() {
@@ -323,6 +335,7 @@ hcc_uninstall_tool() {
     [[ -f "$directory/installed" ]] || { hcc_log "$tool is not managed; unchanged."; return; }
     hcc_check_parent "$entry"
     [[ "$tool" != agy ]] || hcc_check_parent "$alias"
+    [[ "$tool" != agy || ! -e "$HCC_ROOT/watch/pending" ]] || hcc_die 'Incomplete watcher repair; preserve recovery material.'
     expected=$(< "$directory/installed")
     [[ $(hcc_fingerprint "$entry") == "$expected" ]] || hcc_die "$tool entry changed; refusing to overwrite it. Recovery data retained."
     if [[ "$tool" == agy && -f "$directory/alias-installed" ]]; then

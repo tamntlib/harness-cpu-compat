@@ -46,4 +46,10 @@ set +e
 wait "$pid"; status=$?
 set -e
 [[ $status == 143 ]] || fail "TERM status $status"
-printf 'PASS runtime: arguments, empty/metacharacters, cwd, environment, streams, exit status, TERM, exec identity\n'
+mkdir "$work/state/releases/agy/next"
+printf '#!/usr/bin/env bash\nprintf "new-generation\\n"\n' > "$work/state/releases/agy/next/binary"
+chmod +x "$work/state/releases/agy/next/binary"
+printf '%s\n' "$work/state/releases/agy/next/binary" qemu "$work/qemu" > "$work/state/releases/agy/next/selection"
+selected=$(bash "$repo/lib/runtime.sh" --generation "$work/state" agy "$work/state/releases/agy/next")
+[[ "$selected" == new-generation ]] || fail 'generation-bound launcher used mutable current selection'
+printf 'PASS runtime: arguments, empty/metacharacters, cwd, environment, streams, exit status, TERM, exec identity, immutable generation\n'
