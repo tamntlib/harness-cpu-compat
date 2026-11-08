@@ -93,11 +93,12 @@ printf 'user-data-canary' > "$HOME/.config/example-app/settings.json"
 qemu_before=$(sha256sum < "$work/bin/qemu")
 bash "$repo/uninstall.sh" --tool agy --yes > "$work/uninstall.log" 2>&1
 [[ -f "$root/program/lib/runtime.sh" && $("$HOME/.local/bin/claude" --version) == 6.0.0 ]] || fail 'partial uninstall broke other managed tool'
+[[ $(stat -c '%i' "$root/operation.lock" "$root/watch/management.lock") == "$locks" ]] || fail 'partial uninstall changed live locks'
 bash "$repo/uninstall.sh" --tool claude --yes > "$work/uninstall.log" 2>&1
-[[ ! -e "$root/program" && $(stat -c '%i' "$root/operation.lock" "$root/watch/management.lock") == "$locks" ]] || fail 'shared runtime cleanup or stable locks wrong'
+[[ ! -e "$root" ]] || fail 'final uninstall left HCC files or locks behind'
 bash "$repo/uninstall.sh" --tool all --yes > "$work/repeat.log" 2>&1
 [[ $(< "$HOME/.config/example-app/settings.json") == user-data-canary && $(sha256sum < "$work/bin/qemu") == "$qemu_before" ]] || fail 'uninstall changed unrelated configuration or emulator'
-printf 'PASS native handoff boundaries: canonical collisions, parent independence, newer native preservation, partial/shared cleanup, stable locks and user data\n'
+printf 'PASS native handoff boundaries: canonical collisions, parent independence, newer native preservation, partial/shared cleanup, final root removal and user data\n'
 # Review regressions: legitimate symlinked parents and watcher-independent XDG config.
 failures=0
 basepath=$PATH

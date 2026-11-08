@@ -23,7 +23,7 @@ hcc_paths() {
     [[ "$HCC_ROOT" == "$HCC_USER_HOME/"* && "$HCC_ROOT" != "$HCC_USER_HOME/.local/bin" && "$HCC_ROOT" != "$HCC_USER_HOME/.gemini/bin" ]] || hcc_die 'State must be a dedicated directory inside HOME.'
     [[ ! -e "$HCC_ROOT" || ( -d "$HCC_ROOT" && -O "$HCC_ROOT" && ! -L "$HCC_ROOT" ) ]] || hcc_die 'State directory must be owned and not a symlink.'
     local directory tool metadata resolved
-    for directory in "$HCC_ROOT"/{tools,releases,program,program/lib,staging}; do
+    for directory in "$HCC_ROOT"/{tools,releases,program,program/lib,staging,watch}; do
         [[ ! -L "$directory" && ( ! -e "$directory" || ( -d "$directory" && -O "$directory" ) ) ]] || hcc_die "Unsafe state directory: $directory"
     done
     for tool in claude agy; do
@@ -38,8 +38,12 @@ hcc_paths() {
             [[ -L "$HCC_ROOT/tools/$tool/current" && "$resolved" == "$HCC_ROOT/releases/$tool/"* ]] || hcc_die 'Selected release escapes its store.'
         fi
     done
-    metadata="$HCC_ROOT/operation.lock"
-    [[ ! -L "$metadata" && ( ! -e "$metadata" || ( -f "$metadata" && -O "$metadata" ) ) ]] || hcc_die 'Unsafe operation lock.'
+    for metadata in "$HCC_ROOT/operation.lock" "$HCC_ROOT/watch/management.lock" "$HCC_ROOT/watch/pending" "$HCC_ROOT/watch/enabled"; do
+        [[ ! -L "$metadata" && ( ! -e "$metadata" || ( -f "$metadata" && -O "$metadata" ) ) ]] || hcc_die "Unsafe state file: $metadata"
+    done
+    if [[ -e "$HCC_ROOT/qemu-package" || -L "$HCC_ROOT/qemu-package" ]]; then
+        hcc_qemu_owned || hcc_die 'Unsafe or malformed QEMU package ownership record.'
+    fi
 }
 hcc_entry() { case "$1" in claude) printf '%s/.local/bin/claude\n' "$HOME";; agy) printf '%s/.gemini/bin/agy\n' "$HOME";; esac; }
 hcc_check_parent() {
@@ -146,6 +150,39 @@ hcc_probe_pair() {
     [[ "$reported" == "${HCC_VERSION%%[-+]*}" ]] || return 1
     hcc_probe_command "$stage" --help "$@"
 }
+hcc_package_confirm() {
+    local answer= terminal
+    if { exec {terminal}<> /dev/tty; } 2>/dev/null; then
+        printf '%s [y/N]: ' "$1" >&"$terminal"
+        IFS= read -r answer <&"$terminal" || answer=
+        exec {terminal}>&-
+    elif [[ -t 0 ]]; then
+        printf '%s [y/N]: ' "$1" >&2
+        IFS= read -r answer || answer=
+    else
+        hcc_log 'No controlling terminal: QEMU package changes were not approved.'
+        return 1
+    fi
+    [[ "$answer" == y || "$answer" == Y ]]
+}
+hcc_qemu_owned() {
+    local record="$HCC_ROOT/qemu-package"
+    [[ -f "$record" && ! -L "$record" && -O "$record" ]] || return 1
+    local -a fields
+    mapfile -t fields < "$record"
+    [[ ${#fields[@]} == 2 && ${fields[0]} == hcc-qemu-package-v1 && ${fields[1]} == qemu-user ]]
+}
+hcc_qemu_package_state() {
+    local output status
+    command -v dpkg-query >/dev/null 2>&1 || { hcc_log 'Missing dpkg-query; package ownership is unknown.'; return 1; }
+    if output=$(LC_ALL=C dpkg-query -W -f='${db:Status-Status}' qemu-user 2>&1); then status=0; else status=$?; fi
+    case "$status:$output" in
+        0:installed) printf 'installed\n';;
+        0:not-installed|1:'dpkg-query: no packages found matching qemu-user') printf 'absent\n';;
+        0:config-files) printf 'preexisting\n';;
+        *) hcc_log 'Cannot establish qemu-user package state; no package change authorized.'; return 1;;
+    esac
+}
 hcc_install_qemu() {
     command -v apt-get >/dev/null 2>&1 || hcc_die 'Automatic QEMU installation requires APT (Debian/Ubuntu); install qemu-user manually on this system.'
     local privilege=()
@@ -153,11 +190,20 @@ hcc_install_qemu() {
         command -v sudo >/dev/null 2>&1 || hcc_die 'Installing qemu-user requires sudo or root; install it manually, then rerun as the intended user.'
         privilege=(sudo --)
     fi
+    hcc_package_confirm 'QEMU is missing. Install system package qemu-user through APT?' || hcc_die 'QEMU package installation declined; nothing selected.'
+    local before after
+    before=$(hcc_qemu_package_state) || hcc_die 'Cannot inspect QEMU package ownership before installation.'
     hcc_log 'QEMU is missing: installing system package qemu-user through APT. Sudo may ask for your password.'
-    hcc_log 'System package changes are retained even if a later application install fails; uninstall.sh does not remove QEMU.'
+    hcc_log 'System package changes are retained even if a later application install fails; final uninstall can offer removal of an HCC-installed package.'
     # Package scripts must not inherit this installation's management/operation locks.
     ( umask 022; "${privilege[@]}" apt-get update ) 8>&- 9>&- || hcc_die 'APT update failed (including possible sudo authentication failure); the current tool was not published.'
     ( umask 022; "${privilege[@]}" apt-get install -y --no-install-recommends --reinstall qemu-user ) 8>&- 9>&- || hcc_die 'APT qemu-user installation failed; the current tool was not published.'
+    after=$(hcc_qemu_package_state) || hcc_die 'Cannot verify installed QEMU package state.'
+    [[ "$after" == installed ]] || hcc_die 'APT did not establish an installed qemu-user package.'
+    if [[ "$before" == absent ]]; then
+        printf '%s\n' hcc-qemu-package-v1 qemu-user > "$HCC_ROOT/qemu-package.new.$$"
+        mv -Tf -- "$HCC_ROOT/qemu-package.new.$$" "$HCC_ROOT/qemu-package"
+    fi
 }
 hcc_probe() {
     local stage=$1 requested=$2 qemu=$3 allow_package_install=${4:-0}
@@ -471,8 +517,54 @@ hcc_uninstall_tool() {
     rm -rf -- "$directory" "$HCC_ROOT/releases/$tool" "$stage"
     hcc_log "$tool compatibility removed; current version retained in native layout. Native CPU compatibility is not guaranteed."
 }
+hcc_uninstall_unused() {
+    [[ ! -e "$HCC_ROOT/tools/claude/current" && ! -L "$HCC_ROOT/tools/claude/current" &&
+       ! -e "$HCC_ROOT/tools/agy/current" && ! -L "$HCC_ROOT/tools/agy/current" &&
+       ! -e "$HCC_ROOT/tools/claude/pending" && ! -e "$HCC_ROOT/tools/agy/pending" &&
+       ! -e "$HCC_ROOT/watch/pending" && ! -e "$HCC_ROOT/watch/enabled" ]]
+}
+hcc_uninstall_qemu() {
+    hcc_uninstall_unused && hcc_qemu_owned || return 0
+    local state plan action package rest found=0 privilege=()
+    state=$(hcc_qemu_package_state) || return 1
+    if [[ "$state" == absent ]]; then rm -- "$HCC_ROOT/qemu-package" || return 1; return 0; fi
+    if ! hcc_package_confirm 'HCC installed qemu-user. Remove it (and qemu-user-binfmt if required) through APT?'; then
+        hcc_log 'Keeping QEMU by user choice; HCC package ownership will be discarded.'
+        rm -- "$HCC_ROOT/qemu-package" || return 1
+        return 0
+    fi
+    command -v apt-get >/dev/null 2>&1 || { hcc_log 'APT is unavailable; QEMU ownership retained for retry.'; return 1; }
+    if (( EUID != 0 )); then
+        command -v sudo >/dev/null 2>&1 || { hcc_log 'Removing QEMU requires sudo; ownership retained for retry.'; return 1; }
+        privilege=(sudo --)
+    fi
+    plan=$(LC_ALL=C apt-get -s -o APT::Get::AutomaticRemove=false purge qemu-user 8>&- 9>&-) || { hcc_log 'Cannot simulate QEMU removal; ownership retained for retry.'; return 1; }
+    while read -r action package rest; do
+        case "$action" in
+            Purg|Remv)
+                case "$package" in qemu-user) found=1;; qemu-user-binfmt) ;; *) hcc_log 'APT would remove unrelated packages; QEMU retained.'; return 1;; esac;;
+            Inst) hcc_log 'APT would install packages; QEMU retained.'; return 1;;
+        esac
+    done <<< "$plan"
+    (( found )) || { hcc_log 'APT removal plan did not identify qemu-user; QEMU retained.'; return 1; }
+    ( umask 022; "${privilege[@]}" apt-get -y -o APT::Get::AutomaticRemove=false purge qemu-user ) 8>&- 9>&- || { hcc_log 'APT removal failed; QEMU ownership retained for retry.'; return 1; }
+    state=$(hcc_qemu_package_state) || return 1
+    [[ "$state" == absent ]] || { hcc_log 'QEMU is still installed; ownership retained for retry.'; return 1; }
+    rm -- "$HCC_ROOT/qemu-package" || return 1
+    hcc_log 'HCC-installed QEMU package removed.'
+}
+hcc_uninstall_final_cleanup() {
+    hcc_uninstall_unused || return 0
+    # Management commands are sequential; the owned worker has already stopped.
+    rm -f -- "$HCC_ROOT/operation.lock" "$HCC_ROOT/watch/management.lock"
+    local directory
+    for directory in tools releases staging watch; do
+        [[ ! -d "$HCC_ROOT/$directory" ]] || rmdir --ignore-fail-on-non-empty -- "$HCC_ROOT/$directory"
+    done
+    rmdir --ignore-fail-on-non-empty -- "$HCC_ROOT"
+    [[ ! -d "$HCC_ROOT" ]] || hcc_log 'Nonempty HCC state retained; inspect remaining files before removing them.'
+}
 hcc_uninstall_shared_cleanup() {
-    # Keep lock inodes stable for installers already waiting on them.
     if [[ ! -L "$HCC_ROOT/tools/agy/current" && ! -e "$HCC_ROOT/tools/agy/pending" && ! -e "$HCC_ROOT/watch/pending" && ! -e "$HCC_ROOT/watch/enabled" ]] &&
        [[ -e "$HCC_ROOT/watch/owned" || -L "$HCC_ROOT/watch/owned" ]]; then
         hcc_watch_init
@@ -483,6 +575,13 @@ hcc_uninstall_shared_cleanup() {
         fi
     fi
     if [[ ! -L "$HCC_ROOT/tools/claude/current" && ! -L "$HCC_ROOT/tools/agy/current" && ! -e "$HCC_ROOT/tools/claude/pending" && ! -e "$HCC_ROOT/tools/agy/pending" && ! -e "$HCC_ROOT/watch/pending" && ! -e "$HCC_ROOT/watch/enabled" ]]; then
-        rm -rf -- "$HCC_ROOT/program"
+        local relative
+        for relative in install.sh uninstall.sh lib/common.sh lib/runtime.sh lib/watch.sh; do
+            rm -f -- "$HCC_ROOT/program/$relative"
+        done
+        if [[ -d "$HCC_ROOT/program" ]]; then
+            [[ ! -d "$HCC_ROOT/program/lib" ]] || rmdir --ignore-fail-on-non-empty -- "$HCC_ROOT/program/lib"
+            rmdir --ignore-fail-on-non-empty -- "$HCC_ROOT/program"
+        fi
     fi
 }
